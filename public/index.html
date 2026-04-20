@@ -1,0 +1,163 @@
+<!doctype html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>Trace Log Platform Console</title>
+    <link rel="stylesheet" href="/styles.css" />
+  </head>
+  <body>
+    <div class="app-shell">
+      <aside class="sidebar">
+        <div class="brand">
+          <h1>Trace Platform</h1>
+          <p>Observability + Auto Repair</p>
+        </div>
+        <nav class="nav" id="nav">
+          <button data-view="dashboard" class="nav-btn is-active">Dashboard</button>
+          <button data-view="traces" class="nav-btn">Trace Explorer</button>
+          <button data-view="bugs" class="nav-btn">Bug Center</button>
+          <button data-view="tasks" class="nav-btn">Task Center</button>
+          <button data-view="integration" class="nav-btn">Integration Hub</button>
+          <button data-view="traffic" class="nav-btn">Traffic Lab</button>
+        </nav>
+      </aside>
+
+      <main class="main">
+        <header class="main-header">
+          <div>
+            <h2 id="view-title">Dashboard</h2>
+            <p id="view-subtitle">系统全景监控与风险识别</p>
+          </div>
+          <div class="header-actions">
+            <button id="btn-refresh" class="btn btn-primary">刷新</button>
+            <button id="btn-analyze" class="btn btn-accent">立即分析</button>
+            <button id="btn-start-analyzer" class="btn btn-secondary">开启自动分析</button>
+            <button id="btn-stop-analyzer" class="btn btn-secondary">暂停自动分析</button>
+            <button id="btn-reset-system" class="btn btn-warning">清空数据</button>
+          </div>
+        </header>
+
+        <section id="view-dashboard" class="view is-active">
+          <div id="kpi-grid" class="kpi-grid"></div>
+          <div class="panel-grid two-col">
+            <article class="panel">
+              <h3>24h Error Trend</h3>
+              <canvas id="error-trend" width="900" height="280"></canvas>
+            </article>
+            <article class="panel">
+              <h3>Top Error Fingerprints</h3>
+              <div id="top-errors" class="list"></div>
+            </article>
+          </div>
+          <div class="panel-grid two-col">
+            <article class="panel">
+              <h3>Service Health</h3>
+              <div id="service-table"></div>
+            </article>
+            <article class="panel">
+              <h3>Latest Repair Tasks</h3>
+              <div id="task-snapshot" class="list"></div>
+            </article>
+          </div>
+        </section>
+
+        <section id="view-traces" class="view">
+          <article class="panel">
+            <h3>Trace Query</h3>
+            <div class="toolbar">
+              <input id="trace-filter-service" class="input" placeholder="service (optional)" />
+              <select id="trace-filter-status" class="input select">
+                <option value="">status=all</option>
+                <option value="ok">ok</option>
+                <option value="failed">failed</option>
+              </select>
+              <input id="trace-filter-keyword" class="input" placeholder="keyword" />
+              <button id="btn-query-traces" class="btn btn-primary">查询链路</button>
+            </div>
+            <div id="trace-table"></div>
+          </article>
+
+          <article class="panel">
+            <h3>Trace Detail</h3>
+            <div class="toolbar">
+              <input id="trace-id-input" class="input" placeholder="traceId" />
+              <button id="btn-load-trace" class="btn btn-primary">加载详情</button>
+            </div>
+            <pre id="trace-detail" class="console"></pre>
+          </article>
+        </section>
+
+        <section id="view-bugs" class="view">
+          <article class="panel">
+            <h3>Bug Catalog</h3>
+            <div class="toolbar">
+              <select id="bug-filter-status" class="input select">
+                <option value="">status=all</option>
+                <option value="open">open</option>
+                <option value="fixed">fixed</option>
+              </select>
+              <select id="bug-filter-severity" class="input select">
+                <option value="">severity=all</option>
+                <option value="critical">critical</option>
+                <option value="high">high</option>
+                <option value="medium">medium</option>
+                <option value="low">low</option>
+              </select>
+              <button id="btn-query-bugs" class="btn btn-primary">查询 Bug</button>
+            </div>
+            <div id="bug-list" class="list"></div>
+          </article>
+        </section>
+
+        <section id="view-tasks" class="view">
+          <article class="panel">
+            <h3>Repair Task Board</h3>
+            <div class="toolbar">
+              <select id="task-filter-status" class="input select">
+                <option value="">status=all</option>
+                <option value="pending">pending</option>
+                <option value="in_progress">in_progress</option>
+                <option value="deployed">deployed</option>
+                <option value="verified">verified</option>
+                <option value="failed">failed</option>
+              </select>
+              <button id="btn-query-tasks" class="btn btn-primary">查询任务</button>
+              <button id="btn-claim-first" class="btn btn-warning">领取首个 pending</button>
+              <button id="btn-verify-first" class="btn btn-success">标记首个 in_progress 为 verified</button>
+            </div>
+            <div id="task-list" class="list"></div>
+          </article>
+        </section>
+
+        <section id="view-integration" class="view">
+          <article class="panel">
+            <h3>Integration Playbook</h3>
+            <p>优先使用 SDK/Starter 引包接入；HTTP 直调仅作为兜底。示例默认以平台域名 <code>https://trace.example.com</code> 为例。</p>
+            <div class="lang-tabs" id="integration-tabs">
+              <button data-lang="javascript" class="lang-btn is-active">JavaScript</button>
+              <button data-lang="python" class="lang-btn">Python</button>
+              <button data-lang="java" class="lang-btn">Java</button>
+              <button data-lang="curl" class="lang-btn">cURL</button>
+            </div>
+            <pre id="integration-snippet" class="console"></pre>
+          </article>
+        </section>
+
+        <section id="view-traffic" class="view">
+          <article class="panel">
+            <h3>Traffic Simulation</h3>
+            <div class="toolbar">
+              <button id="btn-sim-success" class="btn btn-success">生成成功链路</button>
+              <button id="btn-sim-fail" class="btn btn-danger">生成异常链路</button>
+            </div>
+            <pre id="console-log" class="console"></pre>
+          </article>
+        </section>
+      </main>
+    </div>
+
+    <script src="/sdk/frontend.js"></script>
+    <script type="module" src="/app.js"></script>
+  </body>
+</html>

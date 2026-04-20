@@ -1,0 +1,14 @@
+{
+  "name": "trace-log-platform",
+  "version": "0.1.0",
+  "description": "AI auto-repair oriented trace log platform with frontend/backend ingestion and bug task output",
+  "type": "module",
+  "scripts": {
+    "start": "node src/server.js",
+    "test": "node --test test/*.test.js",
+    "smoke": "node scripts/smoke-test.js"
+  },
+  "engines": {
+    "node": ">=20"
+  }
+}

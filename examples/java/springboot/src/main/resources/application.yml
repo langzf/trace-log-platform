@@ -1,0 +1,9 @@
+server:
+  port: 8080
+
+trace:
+  log:
+    platform-base-url: https://trace.example.com
+    service-name: java-order-service
+    batch-size: 30
+    flush-interval-ms: 1000

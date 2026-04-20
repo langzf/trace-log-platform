@@ -1,0 +1,373 @@
+openapi: 3.0.3
+info:
+  title: Trace Log Platform API
+  version: 0.2.0
+  description: Production-oriented trace logging and auto-repair task orchestration API.
+servers:
+  - url: http://127.0.0.1:3000
+paths:
+  /health:
+    get:
+      summary: health and scheduler status
+      responses:
+        '200':
+          description: ok
+  /v1/logs/frontend:
+    post:
+      summary: ingest a frontend log record
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/LogIngestRequest'
+      responses:
+        '201':
+          description: created
+  /v1/logs/backend:
+    post:
+      summary: ingest a backend log record
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/LogIngestRequest'
+      responses:
+        '201':
+          description: created
+  /v1/logs/batch:
+    post:
+      summary: ingest log records in batch
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                source:
+                  type: string
+                  enum: [frontend, backend]
+                logs:
+                  type: array
+                  items:
+                    $ref: '#/components/schemas/LogIngestRequest'
+              required: [source, logs]
+      responses:
+        '201':
+          description: created
+  /v1/logs:
+    get:
+      summary: query logs by filters
+      parameters:
+        - in: query
+          name: traceId
+          schema:
+            type: string
+        - in: query
+          name: level
+          schema:
+            type: string
+        - in: query
+          name: service
+          schema:
+            type: string
+        - in: query
+          name: source
+          schema:
+            type: string
+        - in: query
+          name: keyword
+          schema:
+            type: string
+        - in: query
+          name: from
+          schema:
+            type: string
+            format: date-time
+        - in: query
+          name: to
+          schema:
+            type: string
+            format: date-time
+        - in: query
+          name: limit
+          schema:
+            type: integer
+      responses:
+        '200':
+          description: ok
+  /v1/services:
+    get:
+      summary: list discovered services
+      responses:
+        '200':
+          description: ok
+  /v1/traces:
+    get:
+      summary: list trace summaries
+      parameters:
+        - in: query
+          name: status
+          schema:
+            type: string
+            enum: [ok, failed]
+        - in: query
+          name: service
+          schema:
+            type: string
+        - in: query
+          name: limit
+          schema:
+            type: integer
+      responses:
+        '200':
+          description: ok
+  /v1/traces/{traceId}:
+    get:
+      summary: query full trace details
+      parameters:
+        - in: path
+          name: traceId
+          required: true
+          schema:
+            type: string
+      responses:
+        '200':
+          description: ok
+  /v1/analyze:
+    post:
+      summary: run exception analysis
+      requestBody:
+        required: false
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                since:
+                  type: string
+                  format: date-time
+      responses:
+        '200':
+          description: ok
+  /v1/bugs:
+    get:
+      summary: list bug reports
+      parameters:
+        - in: query
+          name: status
+          schema:
+            type: string
+        - in: query
+          name: severity
+          schema:
+            type: string
+      responses:
+        '200':
+          description: ok
+  /v1/bugs/{bugId}:
+    get:
+      summary: query a bug detail
+      parameters:
+        - in: path
+          name: bugId
+          required: true
+          schema:
+            type: string
+      responses:
+        '200':
+          description: ok
+        '404':
+          description: not found
+  /v1/repair-tasks:
+    get:
+      summary: list repair tasks
+      parameters:
+        - in: query
+          name: status
+          schema:
+            type: string
+        - in: query
+          name: severity
+          schema:
+            type: string
+      responses:
+        '200':
+          description: ok
+  /v1/repair-tasks/{taskId}/claim:
+    post:
+      summary: claim a repair task
+      parameters:
+        - in: path
+          name: taskId
+          required: true
+          schema:
+            type: string
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                assignee:
+                  type: string
+      responses:
+        '200':
+          description: ok
+        '409':
+          description: conflict
+  /v1/repair-tasks/{taskId}:
+    patch:
+      summary: update a repair task status
+      parameters:
+        - in: path
+          name: taskId
+          required: true
+          schema:
+            type: string
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                status:
+                  type: string
+                  enum: [pending, in_progress, deployed, verified, failed]
+                note:
+                  type: string
+                assignee:
+                  type: string
+      responses:
+        '200':
+          description: ok
+  /v1/dashboard/full:
+    get:
+      summary: load one-shot dashboard payload
+      responses:
+        '200':
+          description: ok
+  /v1/dashboard/overview:
+    get:
+      summary: load overview metrics
+      responses:
+        '200':
+          description: ok
+  /v1/dashboard/error-trend:
+    get:
+      summary: load error trend points
+      parameters:
+        - in: query
+          name: hours
+          schema:
+            type: integer
+        - in: query
+          name: bucketMinutes
+          schema:
+            type: integer
+      responses:
+        '200':
+          description: ok
+  /v1/dashboard/services:
+    get:
+      summary: load service health rows
+      responses:
+        '200':
+          description: ok
+  /v1/dashboard/top-errors:
+    get:
+      summary: load top error fingerprints
+      parameters:
+        - in: query
+          name: limit
+          schema:
+            type: integer
+      responses:
+        '200':
+          description: ok
+  /v1/system/analyzer/start:
+    post:
+      summary: enable scheduled analyzer
+      responses:
+        '200':
+          description: ok
+  /v1/system/analyzer/stop:
+    post:
+      summary: disable scheduled analyzer
+      responses:
+        '200':
+          description: ok
+  /v1/system/analyzer/tick:
+    post:
+      summary: trigger analyzer once
+      responses:
+        '200':
+          description: ok
+  /v1/system/analyzer/state:
+    get:
+      summary: query analyzer state
+      responses:
+        '200':
+          description: ok
+  /v1/system/reset:
+    post:
+      summary: reset all logs, bugs and tasks
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                confirm:
+                  type: string
+      responses:
+        '200':
+          description: ok
+        '400':
+          description: bad request
+components:
+  schemas:
+    LogIngestRequest:
+      type: object
+      properties:
+        traceId:
+          type: string
+        spanId:
+          type: string
+        parentSpanId:
+          type: string
+        level:
+          type: string
+          enum: [debug, info, warn, error]
+        message:
+          type: string
+        service:
+          type: string
+        source:
+          type: string
+        path:
+          type: string
+        method:
+          type: string
+        statusCode:
+          type: integer
+        timestamp:
+          type: string
+          format: date-time
+        error:
+          type: object
+          properties:
+            name:
+              type: string
+            message:
+              type: string
+            stack:
+              type: string
+        meta:
+          type: object
+          additionalProperties: true

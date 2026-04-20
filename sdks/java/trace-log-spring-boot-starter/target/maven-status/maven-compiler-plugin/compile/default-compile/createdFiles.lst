@@ -1,0 +1,3 @@
+com/traceai/sdk/spring/boot/TraceLogProperties.class
+com/traceai/sdk/spring/boot/TraceLogAutoConfiguration.class
+com/traceai/sdk/spring/boot/TraceLogWebFilter.class
