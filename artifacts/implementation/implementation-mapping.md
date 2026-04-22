@@ -10,3 +10,4 @@
 | REQ-006 | `src/sdk/frontend-sdk.js`, `examples/frontend/*` |
 | REQ-007 | `src/sdk/backend-sdk.js`, `examples/backend/*` |
 | REQ-008 | `public/*`, `docs/*`, `test/*`, `scripts/smoke-test.js` |
+| REQ-009 | `src/server.js`, `scripts/openclaw/install_openclaw.sh`, `scripts/openclaw/one-click-install.js`, `test/openclaw-system.test.js` |

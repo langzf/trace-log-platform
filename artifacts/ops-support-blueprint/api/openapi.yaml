@@ -1,0 +1,819 @@
+openapi: 3.1.0
+info:
+  title: Ops Support System API
+  version: 1.0.0
+  description: Internal operations support closed-loop APIs.
+servers:
+  - url: http://ops-support.internal
+paths:
+  /v1/events:
+    post:
+      summary: Ingest a normalized event
+      operationId: ingestEvent
+      parameters:
+        - $ref: '#/components/parameters/IdempotencyKey'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/EventIngestRequest'
+      responses:
+        '202':
+          description: Accepted
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/EventIngestResponse'
+        '400':
+          $ref: '#/components/responses/BadRequest'
+
+  /v1/issues:
+    get:
+      summary: List issues
+      operationId: listIssues
+      parameters:
+        - in: query
+          name: projectKey
+          schema: { type: string }
+        - in: query
+          name: status
+          schema: { type: string }
+        - in: query
+          name: priority
+          schema: { type: string, enum: [P0, P1, P2, P3] }
+        - $ref: '#/components/parameters/Page'
+        - $ref: '#/components/parameters/PageSize'
+      responses:
+        '200':
+          description: OK
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/IssueListResponse'
+
+  /v1/issues/{issueId}:
+    get:
+      summary: Get issue detail
+      operationId: getIssue
+      parameters:
+        - $ref: '#/components/parameters/IssueId'
+      responses:
+        '200':
+          description: OK
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/IssueDetailResponse'
+        '404':
+          $ref: '#/components/responses/NotFound'
+
+  /v1/issues/{issueId}/diagnose:
+    post:
+      summary: Trigger diagnosis for issue
+      operationId: diagnoseIssue
+      parameters:
+        - $ref: '#/components/parameters/IssueId'
+      requestBody:
+        required: false
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                modelTier:
+                  type: string
+                  enum: [economy, performance, ultimate]
+      responses:
+        '202':
+          description: Accepted
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/DiagnosisStartResponse'
+
+  /v1/diagnoses/{diagnosisId}:
+    get:
+      summary: Get diagnosis detail
+      operationId: getDiagnosis
+      parameters:
+        - in: path
+          name: diagnosisId
+          required: true
+          schema: { type: string }
+      responses:
+        '200':
+          description: OK
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/DiagnosisDetailResponse'
+        '404':
+          $ref: '#/components/responses/NotFound'
+
+  /v1/repair-tasks:
+    post:
+      summary: Create repair task
+      operationId: createRepairTask
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/RepairTaskCreateRequest'
+      responses:
+        '201':
+          description: Created
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/RepairTaskResponse'
+
+    get:
+      summary: List repair tasks
+      operationId: listRepairTasks
+      parameters:
+        - in: query
+          name: state
+          schema: { type: string }
+        - in: query
+          name: projectKey
+          schema: { type: string }
+        - $ref: '#/components/parameters/Page'
+        - $ref: '#/components/parameters/PageSize'
+      responses:
+        '200':
+          description: OK
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/RepairTaskListResponse'
+
+  /v1/repair-tasks/{taskId}:
+    get:
+      summary: Get repair task detail
+      operationId: getRepairTask
+      parameters:
+        - in: path
+          name: taskId
+          required: true
+          schema: { type: string }
+      responses:
+        '200':
+          description: OK
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/RepairTaskResponse'
+        '404':
+          $ref: '#/components/responses/NotFound'
+
+  /v1/repair-tasks/{taskId}/dispatch:
+    post:
+      summary: Dispatch repair task to executor
+      operationId: dispatchRepairTask
+      parameters:
+        - in: path
+          name: taskId
+          required: true
+          schema: { type: string }
+      requestBody:
+        required: false
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                executorKey:
+                  type: string
+      responses:
+        '202':
+          description: Accepted
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/RepairTaskResponse'
+
+  /v1/patch-prs/{patchId}:
+    get:
+      summary: Get patch/PR detail
+      operationId: getPatchPr
+      parameters:
+        - in: path
+          name: patchId
+          required: true
+          schema: { type: string }
+      responses:
+        '200':
+          description: OK
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/PatchPrResponse'
+
+  /v1/releases/{releaseId}/rollback:
+    post:
+      summary: Trigger rollback
+      operationId: rollbackRelease
+      parameters:
+        - in: path
+          name: releaseId
+          required: true
+          schema: { type: string }
+      responses:
+        '202':
+          description: Accepted
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ReleaseResponse'
+
+  /v1/config/executors:
+    get:
+      summary: List executor profiles
+      operationId: listExecutors
+      responses:
+        '200':
+          description: OK
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ExecutorListResponse'
+    post:
+      summary: Upsert executor profile
+      operationId: upsertExecutor
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/ExecutorProfile'
+      responses:
+        '200':
+          description: OK
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ExecutorProfile'
+
+  /v1/config/projects:
+    get:
+      summary: List project profiles
+      operationId: listProjects
+      responses:
+        '200':
+          description: OK
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ProjectListResponse'
+    post:
+      summary: Upsert project profile
+      operationId: upsertProject
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/ProjectProfile'
+      responses:
+        '200':
+          description: OK
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ProjectProfile'
+
+  /v1/config/model-policies:
+    get:
+      summary: List model routing policies
+      operationId: listModelPolicies
+      responses:
+        '200':
+          description: OK
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ModelPolicyListResponse'
+    post:
+      summary: Upsert model routing policy
+      operationId: upsertModelPolicy
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/ModelPolicy'
+      responses:
+        '200':
+          description: OK
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ModelPolicy'
+
+  /v1/audit-logs:
+    get:
+      summary: Query audit logs
+      operationId: listAuditLogs
+      parameters:
+        - in: query
+          name: entityType
+          schema: { type: string }
+        - in: query
+          name: entityId
+          schema: { type: string }
+        - in: query
+          name: action
+          schema: { type: string }
+        - in: query
+          name: operatorType
+          schema: { type: string, enum: [agent, human, system] }
+        - in: query
+          name: limit
+          schema: { type: integer, minimum: 1, maximum: 500, default: 200 }
+      responses:
+        '200':
+          description: OK
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/AuditLogListResponse'
+
+  /v1/metrics/overview:
+    get:
+      summary: Get overview metrics
+      operationId: getOverviewMetrics
+      responses:
+        '200':
+          description: OK
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/OverviewMetricsResponse'
+
+  /v1/system/queue/topics:
+    get:
+      summary: List queue topics and DLQ depth
+      operationId: listQueueTopics
+      responses:
+        '200':
+          description: OK
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/QueueTopicListResponse'
+
+  /v1/system/queue/publish:
+    post:
+      summary: Publish envelope to queue topic
+      operationId: publishQueueMessage
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/QueuePublishRequest'
+      responses:
+        '202':
+          description: Accepted
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  ok: { type: boolean }
+                  topic: { type: string }
+                  eventId: { type: string }
+
+  /v1/system/queue/process-next:
+    post:
+      summary: Process one queued message
+      operationId: processNextQueueMessage
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/QueueProcessRequest'
+      responses:
+        '200':
+          description: OK
+        '404':
+          $ref: '#/components/responses/NotFound'
+
+  /v1/system/queue/dlq:
+    get:
+      summary: Query dead letter messages
+      operationId: listDeadLetterMessages
+      parameters:
+        - in: query
+          name: topic
+          required: true
+          schema: { type: string }
+        - in: query
+          name: limit
+          schema: { type: integer, minimum: 1, maximum: 500, default: 50 }
+      responses:
+        '200':
+          description: OK
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  count: { type: integer }
+                  items:
+                    type: array
+                    items:
+                      $ref: '#/components/schemas/EventEnvelope'
+
+  /v1/system/openclaw/status:
+    get:
+      summary: Get OpenClaw install/runtime status
+      operationId: getOpenClawStatus
+      parameters:
+        - in: query
+          name: executorKey
+          schema: { type: string }
+        - in: query
+          name: endpoint
+          schema: { type: string }
+        - in: query
+          name: healthPath
+          schema: { type: string }
+        - in: query
+          name: checkCommand
+          schema: { type: string }
+        - in: query
+          name: checkRepairReceiver
+          schema: { type: boolean }
+        - in: query
+          name: repairReceiverBaseUrl
+          schema: { type: string }
+      responses:
+        '200':
+          description: OK
+
+  /v1/system/openclaw/install:
+    post:
+      summary: One-click install OpenClaw and register executor
+      operationId: installOpenClaw
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/OpenClawInstallRequest'
+      responses:
+        '200':
+          description: OK
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '502':
+          description: Install failed
+
+components:
+  parameters:
+    IdempotencyKey:
+      in: header
+      name: Idempotency-Key
+      required: false
+      schema:
+        type: string
+    IssueId:
+      in: path
+      name: issueId
+      required: true
+      schema:
+        type: string
+    Page:
+      in: query
+      name: page
+      schema:
+        type: integer
+        minimum: 1
+        default: 1
+    PageSize:
+      in: query
+      name: pageSize
+      schema:
+        type: integer
+        minimum: 1
+        maximum: 200
+        default: 20
+
+  responses:
+    BadRequest:
+      description: Bad request
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/ErrorResponse'
+    NotFound:
+      description: Resource not found
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/ErrorResponse'
+
+  schemas:
+    EventIngestRequest:
+      type: object
+      required: [projectKey, eventId, sourceType, payload]
+      properties:
+        projectKey: { type: string }
+        eventId: { type: string }
+        sourceType: { type: string, enum: [feedback, log, alert] }
+        traceId: { type: string }
+        sessionId: { type: string }
+        userId: { type: string }
+        payload:
+          type: object
+          additionalProperties: true
+
+    EventIngestResponse:
+      type: object
+      properties:
+        ok: { type: boolean }
+        issueId: { type: string }
+        deduplicated: { type: boolean }
+
+    Issue:
+      type: object
+      properties:
+        issueId: { type: string }
+        projectKey: { type: string }
+        status: { type: string }
+        priority: { type: string }
+        category: { type: string }
+        clusterId: { type: string }
+        createdAt: { type: string, format: date-time }
+
+    IssueListResponse:
+      type: object
+      properties:
+        count: { type: integer }
+        issues:
+          type: array
+          items:
+            $ref: '#/components/schemas/Issue'
+
+    IssueDetailResponse:
+      type: object
+      properties:
+        issue:
+          $ref: '#/components/schemas/Issue'
+        timeline:
+          type: array
+          items:
+            type: object
+            additionalProperties: true
+
+    DiagnosisStartResponse:
+      type: object
+      properties:
+        diagnosisId: { type: string }
+        status: { type: string }
+
+    DiagnosisDetailResponse:
+      type: object
+      properties:
+        diagnosisId: { type: string }
+        issueId: { type: string }
+        confidence: { type: number }
+        rootCauseSummary: { type: string }
+        evidences:
+          type: array
+          items:
+            type: object
+            properties:
+              type: { type: string }
+              pointer: { type: string }
+
+    RepairTaskCreateRequest:
+      type: object
+      required: [issueId]
+      properties:
+        issueId: { type: string }
+        diagnosisId: { type: string }
+        riskLevel: { type: string, enum: [low, medium, high] }
+        modelTier: { type: string, enum: [economy, performance, ultimate] }
+
+    RepairTaskResponse:
+      type: object
+      properties:
+        taskId: { type: string }
+        issueId: { type: string }
+        state: { type: string }
+        executorKey: { type: string }
+        modelTier: { type: string }
+        budgetTokens: { type: integer }
+        tokensUsed: { type: integer }
+        updatedAt: { type: string, format: date-time }
+
+    RepairTaskListResponse:
+      type: object
+      properties:
+        count: { type: integer }
+        tasks:
+          type: array
+          items:
+            $ref: '#/components/schemas/RepairTaskResponse'
+
+    PatchPrResponse:
+      type: object
+      properties:
+        patchId: { type: string }
+        taskId: { type: string }
+        prUrl: { type: string }
+        prStatus: { type: string }
+        qualityGateStatus: { type: string }
+
+    ReleaseResponse:
+      type: object
+      properties:
+        releaseId: { type: string }
+        releaseStatus: { type: string }
+        rollbackStatus: { type: string }
+
+    ExecutorProfile:
+      type: object
+      required: [executorKey, endpoint]
+      properties:
+        executorKey: { type: string }
+        kind: { type: string }
+        endpoint: { type: string }
+        enabled: { type: boolean }
+        priority: { type: integer }
+
+    ExecutorListResponse:
+      type: object
+      properties:
+        count: { type: integer }
+        executors:
+          type: array
+          items:
+            $ref: '#/components/schemas/ExecutorProfile'
+
+    ProjectProfile:
+      type: object
+      required: [projectKey, repoUrl]
+      properties:
+        projectKey: { type: string }
+        repoUrl: { type: string }
+        defaultBranch: { type: string }
+        status: { type: string }
+
+    ProjectListResponse:
+      type: object
+      properties:
+        count: { type: integer }
+        projects:
+          type: array
+          items:
+            $ref: '#/components/schemas/ProjectProfile'
+
+    ModelPolicy:
+      type: object
+      required: [projectKey, defaultModelTier]
+      properties:
+        projectKey: { type: string }
+        defaultModelTier: { type: string, enum: [economy, performance, ultimate] }
+        upgradeRules:
+          type: object
+          additionalProperties: true
+        budgetDailyTokens: { type: integer }
+        budgetTaskTokens: { type: integer }
+
+    ModelPolicyListResponse:
+      type: object
+      properties:
+        count: { type: integer }
+        policies:
+          type: array
+          items:
+            $ref: '#/components/schemas/ModelPolicy'
+
+    QueuePublishRequest:
+      type: object
+      required: [topic, eventType]
+      properties:
+        topic: { type: string }
+        eventType: { type: string }
+        eventVersion: { type: string, default: v1 }
+        correlationId: { type: string }
+        payload:
+          type: object
+          additionalProperties: true
+        metadata:
+          type: object
+          additionalProperties: true
+
+    QueueProcessRequest:
+      type: object
+      required: [topic]
+      properties:
+        topic: { type: string }
+        fail: { type: boolean }
+        reason: { type: string }
+        maxAttempts: { type: integer }
+
+    QueueTopicStat:
+      type: object
+      properties:
+        topic: { type: string }
+        depth: { type: integer }
+        dlqTopic: { type: string }
+        dlqDepth: { type: integer }
+
+    QueueTopicListResponse:
+      type: object
+      properties:
+        count: { type: integer }
+        topics:
+          type: array
+          items:
+            $ref: '#/components/schemas/QueueTopicStat'
+
+    EventEnvelope:
+      type: object
+      properties:
+        id: { type: string }
+        envelopeVersion: { type: string }
+        eventVersion: { type: string }
+        topic: { type: string }
+        eventType: { type: string }
+        producer: { type: string }
+        timestamp: { type: string, format: date-time }
+        traceId: { type: string }
+        correlationId: { type: string }
+        metadata:
+          type: object
+          additionalProperties: true
+        payload:
+          type: object
+          additionalProperties: true
+
+    OpenClawInstallRequest:
+      type: object
+      properties:
+        dryRun: { type: boolean }
+        forceReinstall: { type: boolean }
+        installCommand: { type: string }
+        installMode: { type: string, enum: [auto, brew, binary, bootstrap] }
+        targetVersion: { type: string }
+        binaryUrl: { type: string }
+        binarySha256: { type: string }
+        bootstrapUrl: { type: string }
+        installDir: { type: string }
+        expectHealth: { type: boolean }
+        postInstallCommand: { type: string }
+        checkCommand: { type: string }
+        endpoint: { type: string }
+        healthPath: { type: string }
+        executorKey: { type: string }
+        autoRegisterExecutor: { type: boolean }
+        syncToRepairReceiver: { type: boolean }
+        repairReceiverBaseUrl: { type: string }
+        priority: { type: integer }
+
+    AuditLog:
+      type: object
+      properties:
+        auditId: { type: string }
+        entityType: { type: string }
+        entityId: { type: string }
+        action: { type: string }
+        operatorType: { type: string, enum: [agent, human, system] }
+        operatorId: { type: string }
+        metadata:
+          type: object
+          additionalProperties: true
+        createdAt: { type: string, format: date-time }
+
+    AuditLogListResponse:
+      type: object
+      properties:
+        count: { type: integer }
+        items:
+          type: array
+          items:
+            $ref: '#/components/schemas/AuditLog'
+
+    OverviewMetricsResponse:
+      type: object
+      properties:
+        mttdMinutes: { type: number }
+        mttrMinutes: { type: number }
+        autoPrAdoptionRate: { type: number }
+        rollbackRate: { type: number }
+        avgCostPerIssue: { type: number }
+
+    ErrorResponse:
+      type: object
+      properties:
+        ok: { type: boolean, default: false }
+        errorCode: { type: string }
+        message: { type: string }
+        requestId: { type: string }

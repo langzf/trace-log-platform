@@ -1,7 +1,7 @@
 openapi: 3.0.3
 info:
   title: Trace Log Platform API
-  version: 0.2.0
+  version: 0.5.0
   description: Production-oriented trace logging and auto-repair task orchestration API.
 servers:
   - url: http://127.0.0.1:3000
@@ -12,6 +12,300 @@ paths:
       responses:
         '200':
           description: ok
+  /v1/audit-logs:
+    get:
+      summary: query audit logs by filters
+      parameters:
+        - in: query
+          name: entityType
+          schema:
+            type: string
+        - in: query
+          name: entityId
+          schema:
+            type: string
+        - in: query
+          name: action
+          schema:
+            type: string
+        - in: query
+          name: operatorType
+          schema:
+            type: string
+            enum: [agent, human, system]
+        - in: query
+          name: limit
+          schema:
+            type: integer
+      responses:
+        '200':
+          description: ok
+  /v1/events:
+    post:
+      summary: ingest normalized event and create or deduplicate issue
+      parameters:
+        - in: header
+          name: Idempotency-Key
+          required: false
+          schema:
+            type: string
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/EventIngestRequest'
+      responses:
+        '202':
+          description: accepted
+        '400':
+          description: bad request
+  /v1/issues:
+    get:
+      summary: query issue list by filters
+      parameters:
+        - in: query
+          name: projectKey
+          schema:
+            type: string
+        - in: query
+          name: status
+          schema:
+            type: string
+        - in: query
+          name: sourceType
+          schema:
+            type: string
+            enum: [feedback, log, alert]
+        - in: query
+          name: limit
+          schema:
+            type: integer
+      responses:
+        '200':
+          description: ok
+  /v1/issues/{issueId}:
+    get:
+      summary: query issue detail and timeline
+      parameters:
+        - in: path
+          name: issueId
+          required: true
+          schema:
+            type: string
+      responses:
+        '200':
+          description: ok
+        '404':
+          description: not found
+  /v1/config/executors:
+    get:
+      summary: list executor profiles
+      parameters:
+        - in: query
+          name: enabled
+          schema:
+            type: boolean
+        - in: query
+          name: kind
+          schema:
+            type: string
+        - in: query
+          name: limit
+          schema:
+            type: integer
+      responses:
+        '200':
+          description: ok
+    post:
+      summary: upsert an executor profile
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/ExecutorProfile'
+      responses:
+        '200':
+          description: ok
+        '400':
+          description: bad request
+  /v1/config/projects:
+    get:
+      summary: list project profiles
+      parameters:
+        - in: query
+          name: status
+          schema:
+            type: string
+        - in: query
+          name: limit
+          schema:
+            type: integer
+      responses:
+        '200':
+          description: ok
+    post:
+      summary: upsert a project profile
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/ProjectProfile'
+      responses:
+        '200':
+          description: ok
+        '400':
+          description: bad request
+  /v1/config/model-policies:
+    get:
+      summary: list model routing policies
+      parameters:
+        - in: query
+          name: projectKey
+          schema:
+            type: string
+        - in: query
+          name: defaultModelTier
+          schema:
+            type: string
+            enum: [economy, performance, ultimate]
+        - in: query
+          name: limit
+          schema:
+            type: integer
+      responses:
+        '200':
+          description: ok
+    post:
+      summary: upsert a model routing policy
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/ModelPolicy'
+      responses:
+        '200':
+          description: ok
+        '400':
+          description: bad request
+  /v1/system/queue/topics:
+    get:
+      summary: list queue topics and dlq depth
+      responses:
+        '200':
+          description: ok
+  /v1/system/queue/publish:
+    post:
+      summary: publish an envelope to topic queue
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                topic:
+                  type: string
+                eventType:
+                  type: string
+                eventVersion:
+                  type: string
+                payload:
+                  type: object
+                  additionalProperties: true
+      responses:
+        '202':
+          description: accepted
+        '400':
+          description: bad request
+  /v1/system/queue/process-next:
+    post:
+      summary: process one message and optionally fail to DLQ
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                topic:
+                  type: string
+                fail:
+                  type: boolean
+                reason:
+                  type: string
+                maxAttempts:
+                  type: integer
+      responses:
+        '200':
+          description: ok
+        '404':
+          description: not found
+  /v1/system/queue/dlq:
+    get:
+      summary: query DLQ messages for a topic
+      parameters:
+        - in: query
+          name: topic
+          schema:
+            type: string
+        - in: query
+          name: limit
+          schema:
+            type: integer
+      responses:
+        '200':
+          description: ok
+  /v1/system/openclaw/status:
+    get:
+      summary: inspect openclaw runtime and integration status
+      parameters:
+        - in: query
+          name: executorKey
+          schema:
+            type: string
+        - in: query
+          name: endpoint
+          schema:
+            type: string
+        - in: query
+          name: healthPath
+          schema:
+            type: string
+        - in: query
+          name: checkCommand
+          schema:
+            type: string
+        - in: query
+          name: checkRepairReceiver
+          schema:
+            type: boolean
+        - in: query
+          name: repairReceiverBaseUrl
+          schema:
+            type: string
+      responses:
+        '200':
+          description: ok
+  /v1/system/openclaw/install:
+    post:
+      summary: one-click install openclaw and auto-register into system
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/OpenClawInstallRequest'
+      responses:
+        '200':
+          description: ok
+        '400':
+          description: bad request
+        '502':
+          description: install failed
   /v1/logs/frontend:
     post:
       summary: ingest a frontend log record
@@ -332,6 +626,284 @@ paths:
           description: bad request
 components:
   schemas:
+    AuditLog:
+      type: object
+      properties:
+        id:
+          type: string
+        entityType:
+          type: string
+        entityId:
+          type: string
+        action:
+          type: string
+        operatorType:
+          type: string
+          enum: [agent, human, system]
+        operatorId:
+          type: string
+        metadata:
+          type: object
+          additionalProperties: true
+        createdAt:
+          type: string
+          format: date-time
+    AuditLogListResponse:
+      type: object
+      properties:
+        ok:
+          type: boolean
+        count:
+          type: integer
+        items:
+          type: array
+          items:
+            $ref: '#/components/schemas/AuditLog'
+    EventIngestRequest:
+      type: object
+      required: [projectKey, eventId, sourceType, payload]
+      properties:
+        projectKey:
+          type: string
+        eventId:
+          type: string
+        sourceType:
+          type: string
+          enum: [feedback, log, alert]
+        traceId:
+          type: string
+        sessionId:
+          type: string
+        userId:
+          type: string
+        payload:
+          type: object
+          additionalProperties: true
+    Issue:
+      type: object
+      properties:
+        id:
+          type: string
+        projectKey:
+          type: string
+        eventId:
+          type: string
+        sourceType:
+          type: string
+        traceId:
+          type: string
+          nullable: true
+        sessionId:
+          type: string
+          nullable: true
+        userId:
+          type: string
+          nullable: true
+        status:
+          type: string
+        priority:
+          type: string
+        payload:
+          type: object
+          additionalProperties: true
+        createdAt:
+          type: string
+          format: date-time
+        updatedAt:
+          type: string
+          format: date-time
+    IssueListResponse:
+      type: object
+      properties:
+        ok:
+          type: boolean
+        count:
+          type: integer
+        issues:
+          type: array
+          items:
+            $ref: '#/components/schemas/Issue'
+    IssueDetailResponse:
+      type: object
+      properties:
+        ok:
+          type: boolean
+        issue:
+          $ref: '#/components/schemas/Issue'
+        timeline:
+          type: array
+          items:
+            $ref: '#/components/schemas/LogIngestRequest'
+    ExecutorProfile:
+      type: object
+      required: [executorKey, endpoint]
+      properties:
+        executorKey:
+          type: string
+        kind:
+          type: string
+        endpoint:
+          type: string
+        enabled:
+          type: boolean
+        priority:
+          type: integer
+    ExecutorListResponse:
+      type: object
+      properties:
+        ok:
+          type: boolean
+        count:
+          type: integer
+        executors:
+          type: array
+          items:
+            $ref: '#/components/schemas/ExecutorProfile'
+    ProjectProfile:
+      type: object
+      required: [projectKey, repoUrl]
+      properties:
+        projectKey:
+          type: string
+        repoUrl:
+          type: string
+        defaultBranch:
+          type: string
+        status:
+          type: string
+    ProjectListResponse:
+      type: object
+      properties:
+        ok:
+          type: boolean
+        count:
+          type: integer
+        projects:
+          type: array
+          items:
+            $ref: '#/components/schemas/ProjectProfile'
+    ModelPolicy:
+      type: object
+      required: [projectKey, defaultModelTier]
+      properties:
+        projectKey:
+          type: string
+        policyName:
+          type: string
+        defaultModelTier:
+          type: string
+          enum: [economy, performance, ultimate]
+        upgradeRules:
+          type: object
+          additionalProperties: true
+        budgetDailyTokens:
+          type: integer
+        budgetTaskTokens:
+          type: integer
+    ModelPolicyListResponse:
+      type: object
+      properties:
+        ok:
+          type: boolean
+        count:
+          type: integer
+        policies:
+          type: array
+          items:
+            $ref: '#/components/schemas/ModelPolicy'
+    QueueTopicStat:
+      type: object
+      properties:
+        topic:
+          type: string
+        depth:
+          type: integer
+        dlqTopic:
+          type: string
+        dlqDepth:
+          type: integer
+    EventEnvelope:
+      type: object
+      properties:
+        id:
+          type: string
+        envelopeVersion:
+          type: string
+        eventVersion:
+          type: string
+        topic:
+          type: string
+        eventType:
+          type: string
+        producer:
+          type: string
+        timestamp:
+          type: string
+          format: date-time
+        traceId:
+          type: string
+          nullable: true
+        correlationId:
+          type: string
+          nullable: true
+        payload:
+          type: object
+          additionalProperties: true
+    OpenClawInstallRequest:
+      type: object
+      properties:
+        dryRun:
+          type: boolean
+        forceReinstall:
+          type: boolean
+        installCommand:
+          type: string
+        installMode:
+          type: string
+          enum: [auto, brew, binary, bootstrap]
+        targetVersion:
+          type: string
+        binaryUrl:
+          type: string
+        binarySha256:
+          type: string
+        bootstrapUrl:
+          type: string
+        installDir:
+          type: string
+        expectHealth:
+          type: boolean
+        postInstallCommand:
+          type: string
+        checkCommand:
+          type: string
+        endpoint:
+          type: string
+        healthPath:
+          type: string
+        executorKey:
+          type: string
+        autoRegisterExecutor:
+          type: boolean
+        syncToRepairReceiver:
+          type: boolean
+        repairReceiverBaseUrl:
+          type: string
+        priority:
+          type: integer
+    ErrorResponse:
+      type: object
+      properties:
+        ok:
+          type: boolean
+          default: false
+        errorCode:
+          type: string
+          nullable: true
+        error:
+          type: string
+        traceId:
+          type: string
     LogIngestRequest:
       type: object
       properties:

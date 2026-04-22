@@ -10,3 +10,4 @@
 - 新增 `examples/`：React/Vue/Express/Koa/Node 接入示例。
 - 新增 `docs/`：集成指南、架构说明、部署手册。
 - 更新测试与冒烟脚本，验证任务流转和 dashboard 接口。
+- 新增 `scripts/openclaw/install_openclaw.sh` 与结构化安装接口参数，支持生产级 OpenClaw 一键安装/校验/回滚并自动接入执行器配置。

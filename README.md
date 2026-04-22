@@ -18,6 +18,7 @@
 ## Quick Start
 
 ```bash
+npm run db:migrate
 npm start
 ```
 
@@ -77,6 +78,11 @@ trace:
 
 ## Core APIs
 
+- Event/Issue: `POST /v1/events`, `GET /v1/issues`, `GET /v1/issues/{issueId}`
+- Config: `GET/POST /v1/config/executors`, `GET/POST /v1/config/projects`, `GET/POST /v1/config/model-policies`
+- Audit: `GET /v1/audit-logs`
+- Queue: `GET /v1/system/queue/topics`, `POST /v1/system/queue/publish`, `POST /v1/system/queue/process-next`, `GET /v1/system/queue/dlq`
+- OpenClaw: `GET /v1/system/openclaw/status`, `POST /v1/system/openclaw/install`
 - Ingest: `POST /v1/logs/frontend`, `POST /v1/logs/backend`, `POST /v1/logs/batch`
 - Query: `GET /v1/logs`, `GET /v1/traces`, `GET /v1/traces/{traceId}`, `GET /v1/services`
 - Analyze: `POST /v1/analyze`
@@ -96,6 +102,23 @@ See `.env.example`:
 - `HOST`
 - `AUTO_ANALYZE`
 - `ANALYZE_INTERVAL_MS`
+- `ENABLE_SQLITE_AUDIT`
+- `AUDIT_DB_PATH`
+- `QUEUE_MAX_ATTEMPTS`
+- `OPENCLAW_INSTALL_COMMAND`
+- `OPENCLAW_INSTALL_SCRIPT`
+- `OPENCLAW_INSTALL_METHOD`
+- `OPENCLAW_TARGET_VERSION`
+- `OPENCLAW_BINARY_URL`
+- `OPENCLAW_BINARY_SHA256`
+- `OPENCLAW_BOOTSTRAP_URL`
+- `OPENCLAW_INSTALL_DIR`
+- `OPENCLAW_EXPECT_HEALTH`
+- `OPENCLAW_POST_INSTALL_COMMAND`
+- `OPENCLAW_CHECK_COMMAND`
+- `OPENCLAW_ENDPOINT`
+- `OPENCLAW_HEALTH_PATH`
+- `REPAIR_RECEIVER_BASE_URL`
 
 ## Validation
 
@@ -103,6 +126,57 @@ See `.env.example`:
 npm test
 npm run smoke
 ```
+
+## Database Migrations
+
+```bash
+npm run db:migrate
+npm run db:migrate:status
+npm run db:migrate:down
+npm run db:explain
+```
+
+默认数据库文件路径为 `data/platform.db`，也可以通过命令行覆盖：
+
+```bash
+node scripts/db/migrate.js up --db /path/to/platform.db
+```
+
+## One-Click OpenClaw Install
+
+```bash
+npm run openclaw:install
+npm run openclaw:install:dry
+```
+
+默认使用生产安装脚本 [scripts/openclaw/install_openclaw.sh](/Users/langzhifa/workspaces/trace_log_platform/scripts/openclaw/install_openclaw.sh)，支持：
+- `auto`：自动选择安装方式（优先 brew，其次 binary/bootstrap）
+- `brew`：使用 Homebrew 安装/升级
+- `binary`：按制品 URL 下载并校验 SHA256 后安装
+- `bootstrap`：执行引导安装脚本 URL
+
+推荐通过结构化参数调用接口（避免手写 shell）：
+
+```bash
+curl -X POST http://127.0.0.1:3000/v1/system/openclaw/install \
+  -H 'content-type: application/json' \
+  -d '{
+    "dryRun": false,
+    "installMode": "binary",
+    "binaryUrl": "https://artifact.example.com/openclaw/openclaw-darwin-arm64.tar.gz",
+    "binarySha256": "9f1cf0...<64hex>",
+    "targetVersion": "2026.3.13",
+    "expectHealth": true,
+    "postInstallCommand": "brew services restart openclaw",
+    "endpoint": "http://127.0.0.1:18789",
+    "executorKey": "openclaw-local",
+    "autoRegisterExecutor": true,
+    "syncToRepairReceiver": true,
+    "repairReceiverBaseUrl": "http://127.0.0.1:8788"
+  }'
+```
+
+如需完全自定义安装流程，仍可使用 `installCommand` 透传。
 
 ## Docs
 

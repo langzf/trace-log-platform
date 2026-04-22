@@ -10,3 +10,9 @@
 | REQ-006 | `/sdk/frontend.js`, `examples/frontend/*` |
 | REQ-007 | `src/sdk/backend-sdk.js`, `examples/backend/*` |
 | REQ-008 | `GET /v1/dashboard/full`, `public/*`, `npm test` |
+| REQ-010 | `GET/POST /v1/config/executors` |
+| REQ-011 | `GET /v1/system/queue/topics`, `POST /v1/system/queue/publish`, `POST /v1/system/queue/process-next`, `GET /v1/system/queue/dlq` |
+| REQ-012 | queue envelope (`eventVersion`) via `POST /v1/system/queue/publish` and auto-publish hooks |
+| REQ-016 | `GET /v1/audit-logs` |
+| REQ-020 | `GET/POST /v1/config/projects`, `GET/POST /v1/config/model-policies` |
+| REQ-021 | `GET /v1/system/openclaw/status`, `POST /v1/system/openclaw/install` |

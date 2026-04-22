@@ -39,3 +39,8 @@ Then 日志可写入平台后端日志接入 API。
 Given 执行 `npm test`
 When 测试完成
 Then 单元与端到端用例均通过。
+
+## REQ-009
+Given OpenClaw 目标节点已配置安装参数
+When 调用 `/v1/system/openclaw/install`
+Then 返回安装执行结果、健康状态与执行器注册结果。

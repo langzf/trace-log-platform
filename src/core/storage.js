@@ -6,11 +6,20 @@ import { generateId, nowIso } from "./ids.js";
 
 const DEFAULT_STATE = {
   logs: [],
+  issues: [],
+  eventIssueMap: {},
+  idempotencyMap: {},
+  auditLogs: [],
+  executors: [],
+  projects: [],
+  modelPolicies: [],
   bugs: [],
   repairTasks: [],
   stats: {
     totalLogs: 0,
     totalErrors: 0,
+    totalEvents: 0,
+    totalAuditLogs: 0,
     analysisRuns: 0,
     updatedAt: null,
     lastAnalysisAt: null,
@@ -57,9 +66,10 @@ function byUpdatedDesc(a, b) {
 }
 
 export class FileBackedStore {
-  constructor(filePath, { maxLogs = 50000 } = {}) {
+  constructor(filePath, { maxLogs = 50000, auditSink = null } = {}) {
     this.filePath = filePath;
     this.maxLogs = maxLogs;
+    this.auditSink = auditSink;
     this.state = clone(DEFAULT_STATE);
     this.persistPromise = Promise.resolve();
   }
@@ -73,6 +83,17 @@ export class FileBackedStore {
       this.state = {
         ...clone(DEFAULT_STATE),
         ...parsed,
+        issues: Array.isArray(parsed.issues) ? parsed.issues : [],
+        eventIssueMap: parsed.eventIssueMap && typeof parsed.eventIssueMap === "object" ? parsed.eventIssueMap : {},
+        idempotencyMap: parsed.idempotencyMap && typeof parsed.idempotencyMap === "object" ? parsed.idempotencyMap : {},
+        auditLogs: Array.isArray(parsed.auditLogs) ? parsed.auditLogs : [],
+        executors: Array.isArray(parsed.executors) ? parsed.executors : [],
+        projects: Array.isArray(parsed.projects) ? parsed.projects : [],
+        modelPolicies: Array.isArray(parsed.modelPolicies) ? parsed.modelPolicies : [],
+        stats: {
+          ...clone(DEFAULT_STATE).stats,
+          ...(parsed.stats || {}),
+        },
       };
     } catch (error) {
       if (error.code !== "ENOENT") {
@@ -118,6 +139,250 @@ export class FileBackedStore {
     }
     this.enforceRetention();
     return this.persist();
+  }
+
+  listIssues({ projectKey, status, sourceType, limit = 200 } = {}) {
+    const issues = this.state.issues
+      .filter((item) => (projectKey ? item.projectKey === projectKey : true))
+      .filter((item) => (status ? item.status === status : true))
+      .filter((item) => (sourceType ? item.sourceType === sourceType : true))
+      .sort(byUpdatedDesc);
+
+    return clone(issues.slice(0, limit));
+  }
+
+  getIssueById(issueId) {
+    const issue = this.state.issues.find((item) => item.id === issueId);
+    return issue ? clone(issue) : null;
+  }
+
+  getIssueByEventId(eventId) {
+    const issueId = this.state.eventIssueMap[eventId];
+    if (!issueId) {
+      return null;
+    }
+    return this.getIssueById(issueId);
+  }
+
+  checkIdempotencyKey(idempotencyKey, requestHash) {
+    if (!idempotencyKey) {
+      return { status: "none" };
+    }
+
+    const existing = this.state.idempotencyMap[idempotencyKey];
+    if (!existing) {
+      return { status: "new" };
+    }
+
+    if (existing.requestHash !== requestHash) {
+      return {
+        status: "conflict",
+        issueId: existing.issueId || null,
+      };
+    }
+
+    return {
+      status: "replay",
+      issueId: existing.issueId || null,
+    };
+  }
+
+  async bindIdempotencyKey(idempotencyKey, requestHash, issueId) {
+    if (!idempotencyKey) {
+      return;
+    }
+
+    this.state.idempotencyMap[idempotencyKey] = {
+      idempotencyKey,
+      requestHash,
+      issueId,
+      updatedAt: nowIso(),
+      createdAt: this.state.idempotencyMap[idempotencyKey]?.createdAt || nowIso(),
+    };
+
+    await this.persist();
+  }
+
+  async createOrGetIssueFromEvent(eventPayload) {
+    const existingIssueId = this.state.eventIssueMap[eventPayload.eventId];
+    if (existingIssueId) {
+      const existing = this.state.issues.find((item) => item.id === existingIssueId);
+      if (existing) {
+        existing.updatedAt = nowIso();
+        await this.persist();
+        return { issue: clone(existing), deduplicated: true };
+      }
+    }
+
+    const issue = {
+      id: generateId("issue_", 8),
+      issueKey: `evt:${eventPayload.eventId}`,
+      projectKey: eventPayload.projectKey,
+      eventId: eventPayload.eventId,
+      sourceType: eventPayload.sourceType,
+      traceId: eventPayload.traceId || null,
+      sessionId: eventPayload.sessionId || null,
+      userId: eventPayload.userId || null,
+      category: "untriaged",
+      subcategory: null,
+      priority: "P3",
+      status: "new",
+      payload: clone(eventPayload.payload || {}),
+      createdAt: nowIso(),
+      updatedAt: nowIso(),
+    };
+
+    this.state.issues.push(issue);
+    this.state.eventIssueMap[eventPayload.eventId] = issue.id;
+    this.state.stats.totalEvents += 1;
+    await this.persist();
+
+    return { issue: clone(issue), deduplicated: false };
+  }
+
+  async addAuditLog(entry) {
+    const payload = {
+      id: entry.id,
+      entityType: entry.entityType,
+      entityId: entry.entityId,
+      action: entry.action,
+      operatorType: entry.operatorType,
+      operatorId: entry.operatorId,
+      metadata: clone(entry.metadata || {}),
+      createdAt: entry.createdAt || nowIso(),
+    };
+
+    this.state.auditLogs.push(payload);
+    this.state.stats.totalAuditLogs += 1;
+    await this.persist();
+
+    if (this.auditSink && typeof this.auditSink.write === "function") {
+      await this.auditSink.write(payload);
+    }
+
+    return clone(payload);
+  }
+
+  listAuditLogs({ entityType, entityId, action, operatorType, limit = 200 } = {}) {
+    const items = this.state.auditLogs
+      .filter((item) => (entityType ? item.entityType === entityType : true))
+      .filter((item) => (entityId ? item.entityId === entityId : true))
+      .filter((item) => (action ? item.action === action : true))
+      .filter((item) => (operatorType ? item.operatorType === operatorType : true))
+      .sort((a, b) => toTime(b.createdAt) - toTime(a.createdAt));
+
+    return clone(items.slice(0, limit));
+  }
+
+  listExecutors({ enabled, kind, limit = 200 } = {}) {
+    const executors = this.state.executors
+      .filter((item) => (enabled === undefined ? true : item.enabled === enabled))
+      .filter((item) => (kind ? item.kind === kind : true))
+      .sort((a, b) => {
+        const aPriority = Number.isFinite(Number(a.priority)) ? Number(a.priority) : 100;
+        const bPriority = Number.isFinite(Number(b.priority)) ? Number(b.priority) : 100;
+        if (aPriority !== bPriority) {
+          return aPriority - bPriority;
+        }
+        return byUpdatedDesc(a, b);
+      });
+    return clone(executors.slice(0, limit));
+  }
+
+  async upsertExecutor(profile) {
+    const now = nowIso();
+    const idx = this.state.executors.findIndex((item) => item.executorKey === profile.executorKey);
+    const current = idx >= 0 ? this.state.executors[idx] : null;
+    const next = {
+      executorKey: profile.executorKey,
+      kind: profile.kind || current?.kind || "codex",
+      endpoint: profile.endpoint,
+      enabled: profile.enabled ?? current?.enabled ?? true,
+      priority: Number.isFinite(Number(profile.priority)) ? Number(profile.priority) : (current?.priority ?? 100),
+      createdAt: current?.createdAt || now,
+      updatedAt: now,
+    };
+
+    if (idx >= 0) {
+      this.state.executors[idx] = next;
+    } else {
+      this.state.executors.push(next);
+    }
+
+    await this.persist();
+    return clone(next);
+  }
+
+  listProjects({ status, limit = 200 } = {}) {
+    const projects = this.state.projects
+      .filter((item) => (status ? item.status === status : true))
+      .sort(byUpdatedDesc);
+    return clone(projects.slice(0, limit));
+  }
+
+  async upsertProject(profile) {
+    const now = nowIso();
+    const idx = this.state.projects.findIndex((item) => item.projectKey === profile.projectKey);
+    const current = idx >= 0 ? this.state.projects[idx] : null;
+    const next = {
+      projectKey: profile.projectKey,
+      repoUrl: profile.repoUrl,
+      defaultBranch: profile.defaultBranch || current?.defaultBranch || "main",
+      status: profile.status || current?.status || "active",
+      createdAt: current?.createdAt || now,
+      updatedAt: now,
+    };
+
+    if (idx >= 0) {
+      this.state.projects[idx] = next;
+    } else {
+      this.state.projects.push(next);
+    }
+
+    await this.persist();
+    return clone(next);
+  }
+
+  listModelPolicies({ projectKey, defaultModelTier, limit = 200 } = {}) {
+    const items = this.state.modelPolicies
+      .filter((item) => (projectKey ? item.projectKey === projectKey : true))
+      .filter((item) => (defaultModelTier ? item.defaultModelTier === defaultModelTier : true))
+      .sort(byUpdatedDesc);
+    return clone(items.slice(0, limit));
+  }
+
+  async upsertModelPolicy(policy) {
+    const now = nowIso();
+    const idx = this.state.modelPolicies.findIndex(
+      (item) => item.projectKey === policy.projectKey && item.policyName === (policy.policyName || "default"),
+    );
+    const current = idx >= 0 ? this.state.modelPolicies[idx] : null;
+    const next = {
+      projectKey: policy.projectKey,
+      policyName: policy.policyName || current?.policyName || "default",
+      defaultModelTier: policy.defaultModelTier || current?.defaultModelTier || "performance",
+      upgradeRules:
+        policy.upgradeRules && typeof policy.upgradeRules === "object" && !Array.isArray(policy.upgradeRules)
+          ? clone(policy.upgradeRules)
+          : clone(current?.upgradeRules || {}),
+      budgetDailyTokens: Number.isFinite(Number(policy.budgetDailyTokens))
+        ? Number(policy.budgetDailyTokens)
+        : (current?.budgetDailyTokens ?? 0),
+      budgetTaskTokens: Number.isFinite(Number(policy.budgetTaskTokens))
+        ? Number(policy.budgetTaskTokens)
+        : (current?.budgetTaskTokens ?? 0),
+      createdAt: current?.createdAt || now,
+      updatedAt: now,
+    };
+
+    if (idx >= 0) {
+      this.state.modelPolicies[idx] = next;
+    } else {
+      this.state.modelPolicies.push(next);
+    }
+
+    await this.persist();
+    return clone(next);
   }
 
   listLogs({

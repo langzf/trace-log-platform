@@ -1,12 +1,22 @@
 import http from "node:http";
 import path from "node:path";
 import { promises as fs } from "node:fs";
+import { createHash } from "node:crypto";
 import { fileURLToPath } from "node:url";
 
 import { analyzeExceptionLogs } from "./core/analyzer.js";
 import { AnalysisScheduler } from "./core/analysis-scheduler.js";
+import { buildEventEnvelope, validateEventEnvelope, validateTopic } from "./core/event-envelope.js";
 import { generateId, nowIso } from "./core/ids.js";
+import {
+  checkOpenClawEndpointHealth,
+  probeOpenClaw,
+  runOpenClawInstall,
+  syncExecutorToRepairReceiver,
+} from "./core/openclaw-manager.js";
+import { SqliteAuditSink } from "./core/sqlite-audit-sink.js";
 import { FileBackedStore } from "./core/storage.js";
+import { InMemoryTopicQueue } from "./core/topic-queue.js";
 import { childSpan, createTraceContext, extractTraceHeaders } from "./core/trace.js";
 
 const __filename = fileURLToPath(import.meta.url);
@@ -15,8 +25,40 @@ const __dirname = path.dirname(__filename);
 const DEFAULT_PORT = Number(process.env.PORT || 3000);
 const DEFAULT_HOST = process.env.HOST || "127.0.0.1";
 const DEFAULT_DATA_FILE = path.join(__dirname, "..", "data", "platform-store.json");
+const DEFAULT_AUDIT_DB_FILE = path.join(__dirname, "..", "data", "platform.db");
 const FRONTEND_SDK_FILE = path.join(__dirname, "sdk", "frontend-sdk.js");
 const PUBLIC_DIR = path.join(__dirname, "..", "public");
+const DEFAULT_QUEUE_MAX_ATTEMPTS = asInt(process.env.QUEUE_MAX_ATTEMPTS, 3);
+const DEFAULT_OPENCLAW_INSTALL_SCRIPT =
+  process.env.OPENCLAW_INSTALL_SCRIPT || path.join(__dirname, "..", "scripts", "openclaw", "install_openclaw.sh");
+const DEFAULT_OPENCLAW_INSTALL_METHOD = process.env.OPENCLAW_INSTALL_METHOD || "auto";
+const DEFAULT_OPENCLAW_TARGET_VERSION = process.env.OPENCLAW_TARGET_VERSION || "";
+const DEFAULT_OPENCLAW_BINARY_URL = process.env.OPENCLAW_BINARY_URL || "";
+const DEFAULT_OPENCLAW_BINARY_SHA256 = process.env.OPENCLAW_BINARY_SHA256 || "";
+const DEFAULT_OPENCLAW_BOOTSTRAP_URL = process.env.OPENCLAW_BOOTSTRAP_URL || "";
+const DEFAULT_OPENCLAW_INSTALL_DIR = process.env.OPENCLAW_INSTALL_DIR || "";
+const DEFAULT_OPENCLAW_EXPECT_HEALTH = process.env.OPENCLAW_EXPECT_HEALTH === "1";
+const DEFAULT_OPENCLAW_POST_INSTALL_COMMAND = process.env.OPENCLAW_POST_INSTALL_COMMAND || "";
+const DEFAULT_OPENCLAW_INSTALL_COMMAND =
+  process.env.OPENCLAW_INSTALL_COMMAND ||
+  buildInstallScriptCommand({
+    scriptPath: DEFAULT_OPENCLAW_INSTALL_SCRIPT,
+    installMode: DEFAULT_OPENCLAW_INSTALL_METHOD,
+    targetVersion: DEFAULT_OPENCLAW_TARGET_VERSION,
+    binaryUrl: DEFAULT_OPENCLAW_BINARY_URL,
+    binarySha256: DEFAULT_OPENCLAW_BINARY_SHA256,
+    bootstrapUrl: DEFAULT_OPENCLAW_BOOTSTRAP_URL,
+    installDir: DEFAULT_OPENCLAW_INSTALL_DIR,
+    endpoint: process.env.OPENCLAW_ENDPOINT || "http://127.0.0.1:18789",
+    healthPath: process.env.OPENCLAW_HEALTH_PATH || "/health",
+    expectHealth: DEFAULT_OPENCLAW_EXPECT_HEALTH,
+    postInstallCommand: DEFAULT_OPENCLAW_POST_INSTALL_COMMAND,
+    forceReinstall: false,
+  });
+const DEFAULT_OPENCLAW_CHECK_COMMAND = process.env.OPENCLAW_CHECK_COMMAND || "openclaw --version";
+const DEFAULT_OPENCLAW_ENDPOINT = process.env.OPENCLAW_ENDPOINT || "http://127.0.0.1:18789";
+const DEFAULT_OPENCLAW_HEALTH_PATH = process.env.OPENCLAW_HEALTH_PATH || "/health";
+const DEFAULT_REPAIR_RECEIVER_BASE_URL = process.env.REPAIR_RECEIVER_BASE_URL || "http://127.0.0.1:8788";
 
 const MAX_BODY_BYTES = 1024 * 1024 * 5;
 const CONTENT_TYPE_BY_EXT = {
@@ -44,8 +86,95 @@ function sendText(res, statusCode, payload, contentType = "text/plain; charset=u
 }
 
 function asInt(value, fallback) {
+  if (value === undefined || value === null || value === "") {
+    return fallback;
+  }
   const num = Number(value);
   return Number.isFinite(num) ? num : fallback;
+}
+
+function shellQuote(value) {
+  return `'${String(value).replace(/'/g, `'\\''`)}'`;
+}
+
+function buildInstallScriptCommand({
+  scriptPath,
+  installMode,
+  targetVersion,
+  binaryUrl,
+  binarySha256,
+  bootstrapUrl,
+  installDir,
+  endpoint,
+  healthPath,
+  expectHealth,
+  postInstallCommand,
+  forceReinstall,
+}) {
+  const assignments = [];
+  const pushEnv = (name, rawValue) => {
+    if (rawValue === undefined || rawValue === null) {
+      return;
+    }
+    const value = String(rawValue);
+    if (!value.trim()) {
+      return;
+    }
+    assignments.push(`${name}=${shellQuote(value)}`);
+  };
+
+  pushEnv("OPENCLAW_INSTALL_METHOD", installMode);
+  pushEnv("OPENCLAW_TARGET_VERSION", targetVersion);
+  pushEnv("OPENCLAW_BINARY_URL", binaryUrl);
+  pushEnv("OPENCLAW_BINARY_SHA256", binarySha256);
+  pushEnv("OPENCLAW_BOOTSTRAP_URL", bootstrapUrl);
+  pushEnv("OPENCLAW_INSTALL_DIR", installDir);
+  pushEnv("OPENCLAW_ENDPOINT", endpoint);
+  pushEnv("OPENCLAW_HEALTH_PATH", healthPath);
+  pushEnv("OPENCLAW_POST_INSTALL_COMMAND", postInstallCommand);
+  pushEnv("OPENCLAW_EXPECT_HEALTH", expectHealth ? "1" : "0");
+
+  const commandParts = [];
+  if (assignments.length > 0) {
+    commandParts.push(assignments.join(" "));
+  }
+  commandParts.push(`/bin/bash ${shellQuote(scriptPath)} --non-interactive`);
+  if (forceReinstall) {
+    commandParts.push("--force");
+  }
+  return commandParts.join(" ");
+}
+
+function createClientError(message, statusCode = 400, errorCode = "ERR-1001") {
+  const error = new Error(message);
+  error.statusCode = statusCode;
+  error.errorCode = errorCode;
+  return error;
+}
+
+function stableStringify(value) {
+  if (value === null || typeof value !== "object") {
+    return JSON.stringify(value);
+  }
+  if (Array.isArray(value)) {
+    return `[${value.map((item) => stableStringify(item)).join(",")}]`;
+  }
+  const keys = Object.keys(value).sort();
+  return `{${keys.map((key) => `${JSON.stringify(key)}:${stableStringify(value[key])}`).join(",")}}`;
+}
+
+function payloadHash(value) {
+  return createHash("sha256").update(stableStringify(value)).digest("hex");
+}
+
+function normalizeHeaderValue(value) {
+  if (Array.isArray(value)) {
+    return value[0] || "";
+  }
+  if (value === undefined || value === null) {
+    return "";
+  }
+  return String(value);
 }
 
 async function readJsonBody(req) {
@@ -169,6 +298,420 @@ function safeError(error) {
   };
 }
 
+function validateEventIngestPayload(body) {
+  if (!body || typeof body !== "object" || Array.isArray(body)) {
+    throw createClientError("payload must be an object");
+  }
+
+  const projectKey = String(body.projectKey || "").trim();
+  if (!projectKey) {
+    throw createClientError("projectKey is required");
+  }
+
+  const eventId = String(body.eventId || "").trim();
+  if (!eventId) {
+    throw createClientError("eventId is required");
+  }
+
+  const sourceType = String(body.sourceType || "").trim();
+  const supportedTypes = new Set(["feedback", "log", "alert"]);
+  if (!supportedTypes.has(sourceType)) {
+    throw createClientError("sourceType must be one of feedback/log/alert");
+  }
+
+  if (!body.payload || typeof body.payload !== "object" || Array.isArray(body.payload)) {
+    throw createClientError("payload field must be an object");
+  }
+
+  return {
+    projectKey,
+    eventId,
+    sourceType,
+    traceId: body.traceId ? String(body.traceId) : null,
+    sessionId: body.sessionId ? String(body.sessionId) : null,
+    userId: body.userId ? String(body.userId) : null,
+    payload: body.payload,
+  };
+}
+
+function parseBooleanQuery(value, fieldName = "value") {
+  if (value === undefined || value === null || value === "") {
+    return undefined;
+  }
+  const normalized = String(value).trim().toLowerCase();
+  if (normalized === "true" || normalized === "1") {
+    return true;
+  }
+  if (normalized === "false" || normalized === "0") {
+    return false;
+  }
+  throw createClientError(`${fieldName} must be true/false`);
+}
+
+function validateExecutorProfile(body) {
+  if (!body || typeof body !== "object" || Array.isArray(body)) {
+    throw createClientError("payload must be an object");
+  }
+
+  const executorKey = String(body.executorKey || "").trim();
+  if (!executorKey) {
+    throw createClientError("executorKey is required");
+  }
+
+  const endpoint = String(body.endpoint || "").trim();
+  if (!endpoint) {
+    throw createClientError("endpoint is required");
+  }
+
+  const kind = body.kind === undefined ? undefined : String(body.kind || "").trim();
+  if (body.kind !== undefined && !kind) {
+    throw createClientError("kind cannot be empty");
+  }
+
+  let enabled;
+  if (body.enabled !== undefined) {
+    if (typeof body.enabled !== "boolean") {
+      throw createClientError("enabled must be boolean");
+    }
+    enabled = body.enabled;
+  }
+
+  let priority;
+  if (body.priority !== undefined) {
+    const parsed = Number(body.priority);
+    if (!Number.isFinite(parsed)) {
+      throw createClientError("priority must be a number");
+    }
+    priority = Math.trunc(parsed);
+  }
+
+  return {
+    executorKey,
+    kind,
+    endpoint,
+    enabled,
+    priority,
+  };
+}
+
+function validateProjectProfile(body) {
+  if (!body || typeof body !== "object" || Array.isArray(body)) {
+    throw createClientError("payload must be an object");
+  }
+
+  const projectKey = String(body.projectKey || "").trim();
+  if (!projectKey) {
+    throw createClientError("projectKey is required");
+  }
+
+  const repoUrl = String(body.repoUrl || "").trim();
+  if (!repoUrl) {
+    throw createClientError("repoUrl is required");
+  }
+
+  const defaultBranch = body.defaultBranch === undefined ? undefined : String(body.defaultBranch || "").trim();
+  if (body.defaultBranch !== undefined && !defaultBranch) {
+    throw createClientError("defaultBranch cannot be empty");
+  }
+
+  const status = body.status === undefined ? undefined : String(body.status || "").trim();
+  if (body.status !== undefined && !status) {
+    throw createClientError("status cannot be empty");
+  }
+
+  return {
+    projectKey,
+    repoUrl,
+    defaultBranch,
+    status,
+  };
+}
+
+function validateModelPolicy(body) {
+  if (!body || typeof body !== "object" || Array.isArray(body)) {
+    throw createClientError("payload must be an object");
+  }
+
+  const projectKey = String(body.projectKey || "").trim();
+  if (!projectKey) {
+    throw createClientError("projectKey is required");
+  }
+
+  const tiers = new Set(["economy", "performance", "ultimate"]);
+  const defaultModelTier = String(body.defaultModelTier || "").trim();
+  if (!tiers.has(defaultModelTier)) {
+    throw createClientError("defaultModelTier must be one of economy/performance/ultimate");
+  }
+
+  if (
+    body.upgradeRules !== undefined &&
+    (!body.upgradeRules || typeof body.upgradeRules !== "object" || Array.isArray(body.upgradeRules))
+  ) {
+    throw createClientError("upgradeRules must be an object");
+  }
+
+  const policyName = body.policyName === undefined ? undefined : String(body.policyName || "").trim();
+  if (body.policyName !== undefined && !policyName) {
+    throw createClientError("policyName cannot be empty");
+  }
+
+  const budgetDailyTokens =
+    body.budgetDailyTokens === undefined ? undefined : Number.parseInt(String(body.budgetDailyTokens), 10);
+  if (body.budgetDailyTokens !== undefined && !Number.isFinite(budgetDailyTokens)) {
+    throw createClientError("budgetDailyTokens must be an integer");
+  }
+
+  const budgetTaskTokens =
+    body.budgetTaskTokens === undefined ? undefined : Number.parseInt(String(body.budgetTaskTokens), 10);
+  if (body.budgetTaskTokens !== undefined && !Number.isFinite(budgetTaskTokens)) {
+    throw createClientError("budgetTaskTokens must be an integer");
+  }
+
+  return {
+    projectKey,
+    policyName,
+    defaultModelTier,
+    upgradeRules: body.upgradeRules,
+    budgetDailyTokens,
+    budgetTaskTokens,
+  };
+}
+
+function parseBooleanValue(value, fallback = false) {
+  if (value === undefined || value === null || value === "") {
+    return fallback;
+  }
+  if (typeof value === "boolean") {
+    return value;
+  }
+  const normalized = String(value).trim().toLowerCase();
+  if (normalized === "true" || normalized === "1") {
+    return true;
+  }
+  if (normalized === "false" || normalized === "0") {
+    return false;
+  }
+  throw createClientError("boolean value is invalid");
+}
+
+function validateOpenClawInstallPayload(body) {
+  if (!body || typeof body !== "object" || Array.isArray(body)) {
+    throw createClientError("payload must be an object");
+  }
+
+  const executorKey = String(body.executorKey || "openclaw-local").trim();
+  const endpoint = String(body.endpoint || DEFAULT_OPENCLAW_ENDPOINT).trim();
+  if (!endpoint) {
+    throw createClientError("endpoint is required");
+  }
+
+  const installCommand = body.installCommand === undefined ? "" : String(body.installCommand || "").trim();
+  const checkCommand = String(body.checkCommand || DEFAULT_OPENCLAW_CHECK_COMMAND).trim();
+  const healthPath = String(body.healthPath || DEFAULT_OPENCLAW_HEALTH_PATH).trim() || "/health";
+  const repairReceiverBaseUrl = String(body.repairReceiverBaseUrl || DEFAULT_REPAIR_RECEIVER_BASE_URL).trim();
+  const installMode = String(body.installMode || DEFAULT_OPENCLAW_INSTALL_METHOD || "auto").trim().toLowerCase();
+  if (!["auto", "brew", "binary", "bootstrap"].includes(installMode)) {
+    throw createClientError("installMode must be one of auto/brew/binary/bootstrap");
+  }
+
+  const targetVersion = body.targetVersion === undefined ? DEFAULT_OPENCLAW_TARGET_VERSION : String(body.targetVersion).trim();
+  const binaryUrl = body.binaryUrl === undefined ? DEFAULT_OPENCLAW_BINARY_URL : String(body.binaryUrl).trim();
+  const binarySha256 =
+    body.binarySha256 === undefined ? DEFAULT_OPENCLAW_BINARY_SHA256 : String(body.binarySha256).trim();
+  const bootstrapUrl =
+    body.bootstrapUrl === undefined ? DEFAULT_OPENCLAW_BOOTSTRAP_URL : String(body.bootstrapUrl).trim();
+  const installDir = body.installDir === undefined ? DEFAULT_OPENCLAW_INSTALL_DIR : String(body.installDir).trim();
+  const postInstallCommand =
+    body.postInstallCommand === undefined ? DEFAULT_OPENCLAW_POST_INSTALL_COMMAND : String(body.postInstallCommand).trim();
+
+  const timeoutMsRaw = body.timeoutMs === undefined ? 10 * 60 * 1000 : Number(body.timeoutMs);
+  if (!Number.isFinite(timeoutMsRaw) || timeoutMsRaw <= 0) {
+    throw createClientError("timeoutMs must be a positive number");
+  }
+
+  const priorityRaw = body.priority === undefined ? 80 : Number(body.priority);
+  if (!Number.isFinite(priorityRaw)) {
+    throw createClientError("priority must be a number");
+  }
+
+  return {
+    dryRun: parseBooleanValue(body.dryRun, false),
+    forceReinstall: parseBooleanValue(body.forceReinstall, false),
+    autoRegisterExecutor: parseBooleanValue(body.autoRegisterExecutor, true),
+    syncToRepairReceiver: parseBooleanValue(body.syncToRepairReceiver, true),
+    timeoutMs: Math.trunc(timeoutMsRaw),
+    executorKey,
+    endpoint,
+    healthPath: healthPath.startsWith("/") ? healthPath : `/${healthPath}`,
+    installCommand,
+    checkCommand,
+    repairReceiverBaseUrl,
+    installMode,
+    targetVersion,
+    binaryUrl,
+    binarySha256,
+    bootstrapUrl,
+    installDir,
+    expectHealth: body.expectHealth === undefined ? DEFAULT_OPENCLAW_EXPECT_HEALTH : parseBooleanValue(body.expectHealth),
+    postInstallCommand,
+    kind: String(body.kind || "openclaw-gateway").trim() || "openclaw-gateway",
+    priority: Math.trunc(priorityRaw),
+    credentialRef: body.credentialRef ? String(body.credentialRef).trim() : null,
+    isDefault: parseBooleanValue(body.isDefault, false),
+    executePath: String(body.executePath || "/v1/execute-repair").trim() || "/v1/execute-repair",
+  };
+}
+
+async function resolveOpenClawInstallCommand(config) {
+  if (config.installCommand) {
+    return {
+      command: config.installCommand,
+      source: "request.installCommand",
+      scriptPath: null,
+    };
+  }
+
+  if (process.env.OPENCLAW_INSTALL_COMMAND && String(process.env.OPENCLAW_INSTALL_COMMAND).trim()) {
+    return {
+      command: String(process.env.OPENCLAW_INSTALL_COMMAND).trim(),
+      source: "env.OPENCLAW_INSTALL_COMMAND",
+      scriptPath: null,
+    };
+  }
+
+  if (config.installMode === "binary" && !config.binaryUrl) {
+    throw createClientError("binaryUrl is required when installMode=binary");
+  }
+  if (config.installMode === "bootstrap" && !config.bootstrapUrl) {
+    throw createClientError("bootstrapUrl is required when installMode=bootstrap");
+  }
+
+  try {
+    await fs.access(DEFAULT_OPENCLAW_INSTALL_SCRIPT);
+  } catch {
+    throw createClientError(
+      `default install script not found: ${DEFAULT_OPENCLAW_INSTALL_SCRIPT}. Provide installCommand explicitly.`,
+      400,
+      "ERR-1001",
+    );
+  }
+
+  const command = buildInstallScriptCommand({
+    scriptPath: DEFAULT_OPENCLAW_INSTALL_SCRIPT,
+    installMode: config.installMode,
+    targetVersion: config.targetVersion,
+    binaryUrl: config.binaryUrl,
+    binarySha256: config.binarySha256,
+    bootstrapUrl: config.bootstrapUrl,
+    installDir: config.installDir,
+    endpoint: config.endpoint,
+    healthPath: config.healthPath,
+    expectHealth: config.expectHealth,
+    postInstallCommand: config.postInstallCommand,
+    forceReinstall: config.forceReinstall,
+  });
+  return {
+    command,
+    source: "default.install_script",
+    scriptPath: DEFAULT_OPENCLAW_INSTALL_SCRIPT,
+  };
+}
+
+function parseTopicValue(value, fieldName = "topic") {
+  try {
+    return validateTopic(value);
+  } catch (error) {
+    throw createClientError(`${fieldName}: ${error.message}`);
+  }
+}
+
+function buildEventIngestLog(eventPayload, req) {
+  const payload = eventPayload.payload || {};
+  return buildIngestedLog({
+    source: eventPayload.sourceType === "log" ? "backend" : "frontend",
+    req,
+    body: {
+      traceId: eventPayload.traceId || undefined,
+      level: payload.level || "info",
+      service: payload.service || req.headers["x-service-name"] || `event-${eventPayload.sourceType}`,
+      message: payload.message || `event_ingested:${eventPayload.sourceType}`,
+      path: payload.path || null,
+      method: payload.method || null,
+      statusCode: payload.statusCode || null,
+      error: payload.error || null,
+      meta: {
+        ...(payload.meta || {}),
+        projectKey: eventPayload.projectKey,
+        eventId: eventPayload.eventId,
+        sourceType: eventPayload.sourceType,
+      },
+    },
+  });
+}
+
+function resolveOperator(req) {
+  const rawType = normalizeHeaderValue(req.headers["x-operator-type"]).trim().toLowerCase();
+  const operatorType = ["agent", "human", "system"].includes(rawType) ? rawType : "system";
+  const operatorId = normalizeHeaderValue(req.headers["x-operator-id"]).trim() || "trace-log-platform";
+  return { operatorType, operatorId };
+}
+
+async function writeAuditLog(store, req, payload) {
+  if (!store || typeof store.addAuditLog !== "function") {
+    return;
+  }
+  const operator = resolveOperator(req);
+  await store.addAuditLog({
+    id: generateId("audit_", 8),
+    entityType: payload.entityType,
+    entityId: payload.entityId,
+    action: payload.action,
+    operatorType: payload.operatorType || operator.operatorType,
+    operatorId: payload.operatorId || operator.operatorId,
+    metadata: payload.metadata || {},
+    createdAt: nowIso(),
+  });
+}
+
+function publishQueueEvent(queueBroker, routeContext, payload) {
+  if (!queueBroker || typeof queueBroker.publish !== "function") {
+    return null;
+  }
+  const envelope = buildEventEnvelope({
+    topic: payload.topic,
+    eventType: payload.eventType,
+    eventVersion: payload.eventVersion || "v1",
+    traceId: routeContext?.traceContext?.traceId || null,
+    correlationId: payload.correlationId || null,
+    payload: payload.payload || {},
+    metadata: payload.metadata || {},
+  });
+  validateEventEnvelope(envelope);
+  return queueBroker.publish(payload.topic, envelope);
+}
+
+function buildRepairReceiverExecutorPayload(config) {
+  return {
+    executorKey: config.executorKey,
+    kind: config.kind,
+    endpoint: config.endpoint,
+    executePath: config.executePath,
+    healthPath: config.healthPath,
+    credentialRef: config.credentialRef,
+    priority: config.priority,
+    enabled: true,
+    isDefault: config.isDefault,
+    agents: {
+      preferred: ["codex", "claude-code"],
+      fallback: ["codex"],
+    },
+    machine: {
+      label: "openclaw-local",
+      region: "local",
+    },
+  };
+}
+
 function createRequestContext(req) {
   const incoming = extractTraceHeaders(req.headers);
   const traceContext = createTraceContext({
@@ -245,18 +788,330 @@ function dashboardPayload(store, scheduler) {
   };
 }
 
-async function handleApiRoute(req, res, store, routeContext, scheduler) {
+async function handleApiRoute(req, res, store, routeContext, scheduler, queueBroker) {
   const url = new URL(req.url, `http://${req.headers.host || "localhost"}`);
   const pathname = url.pathname;
   const method = req.method;
 
   if (method === "GET" && pathname === "/health") {
+    const queueTopics = queueBroker.listTopics();
+    const queueDepth = queueTopics.reduce((sum, item) => sum + item.depth, 0);
+    const dlqDepth = queueTopics.reduce((sum, item) => sum + item.dlqDepth, 0);
     return sendJson(res, 200, {
       ok: true,
       service: "trace-log-platform",
       now: nowIso(),
       stats: store.getStats(),
+      queue: {
+        topicCount: queueTopics.length,
+        queueDepth,
+        dlqDepth,
+      },
       scheduler: scheduler.snapshot(),
+    });
+  }
+
+  if (method === "GET" && pathname === "/v1/system/openclaw/status") {
+    const executorKey = String(url.searchParams.get("executorKey") || "openclaw-local").trim();
+    const checkCommand = String(url.searchParams.get("checkCommand") || DEFAULT_OPENCLAW_CHECK_COMMAND).trim();
+    const endpoint = String(url.searchParams.get("endpoint") || DEFAULT_OPENCLAW_ENDPOINT).trim();
+    const healthPath = String(url.searchParams.get("healthPath") || DEFAULT_OPENCLAW_HEALTH_PATH).trim();
+    const checkRepairReceiver = parseBooleanQuery(url.searchParams.get("checkRepairReceiver"), "checkRepairReceiver");
+    const repairReceiverBaseUrl = String(
+      url.searchParams.get("repairReceiverBaseUrl") || DEFAULT_REPAIR_RECEIVER_BASE_URL,
+    ).trim();
+
+    const openclaw = await probeOpenClaw({
+      checkCommand,
+    });
+    const endpointHealth = await checkOpenClawEndpointHealth({
+      endpoint,
+      healthPath,
+    });
+
+    const executors = store
+      .listExecutors({ limit: 1000 })
+      .filter((item) => item.executorKey === executorKey || String(item.kind || "").includes("openclaw"));
+
+    let repairReceiver = null;
+    if (checkRepairReceiver) {
+      try {
+        const checkUrl = new URL(
+          `/v1/config/executors/${encodeURIComponent(executorKey)}`,
+          repairReceiverBaseUrl,
+        ).toString();
+        const res = await fetch(checkUrl, {
+          method: "GET",
+          signal: AbortSignal.timeout(5000),
+        });
+        const raw = await res.text();
+        repairReceiver = {
+          ok: res.ok,
+          statusCode: res.status,
+          response: raw,
+        };
+      } catch (error) {
+        repairReceiver = {
+          ok: false,
+          statusCode: null,
+          response: null,
+          error: error.message || String(error),
+        };
+      }
+    }
+
+    return sendJson(res, 200, {
+      ok: true,
+      openclaw,
+      endpointHealth,
+      installer: {
+        scriptPath: DEFAULT_OPENCLAW_INSTALL_SCRIPT,
+        defaultInstallCommand: DEFAULT_OPENCLAW_INSTALL_COMMAND,
+        defaults: {
+          installMode: DEFAULT_OPENCLAW_INSTALL_METHOD,
+          targetVersion: DEFAULT_OPENCLAW_TARGET_VERSION || null,
+          binaryUrl: DEFAULT_OPENCLAW_BINARY_URL || null,
+          bootstrapUrl: DEFAULT_OPENCLAW_BOOTSTRAP_URL || null,
+          installDir: DEFAULT_OPENCLAW_INSTALL_DIR || null,
+          expectHealth: DEFAULT_OPENCLAW_EXPECT_HEALTH,
+        },
+      },
+      executors,
+      repairReceiver,
+    });
+  }
+
+  if (method === "POST" && pathname === "/v1/system/openclaw/install") {
+    const body = await readJsonBody(req);
+    const config = validateOpenClawInstallPayload(body);
+
+    const before = await probeOpenClaw({
+      checkCommand: config.checkCommand,
+    });
+
+    let effectiveInstallCommand = config.installCommand || "";
+    let installCommandSource = config.installCommand ? "request.installCommand" : "default.install_script";
+    let installScriptPath = null;
+    let install = {
+      executed: false,
+      skipped: false,
+      dryRun: config.dryRun,
+      installCommand: effectiveInstallCommand || null,
+      commandSource: installCommandSource,
+      scriptPath: installScriptPath,
+    };
+
+    if (!before.installed || config.forceReinstall) {
+      const installCommandMeta = await resolveOpenClawInstallCommand(config);
+      effectiveInstallCommand = installCommandMeta.command;
+      installCommandSource = installCommandMeta.source;
+      installScriptPath = installCommandMeta.scriptPath;
+      install.commandSource = installCommandSource;
+      install.scriptPath = installScriptPath;
+      install.installCommand = effectiveInstallCommand || null;
+
+      try {
+        const result = await runOpenClawInstall({
+          installCommand: effectiveInstallCommand,
+          dryRun: config.dryRun,
+          timeoutMs: config.timeoutMs,
+        });
+        install = {
+          ...install,
+          ...result,
+        };
+      } catch (error) {
+        const err = new Error(`OpenClaw install failed: ${error.message || String(error)}`);
+        err.statusCode = 502;
+        err.errorCode = "ERR-2001";
+        throw err;
+      }
+    } else {
+      install.skipped = true;
+      install.reason = "already_installed";
+      if (!install.installCommand) {
+        install.installCommand = "SKIPPED_ALREADY_INSTALLED";
+      }
+    }
+
+    const after = await probeOpenClaw({
+      checkCommand: config.checkCommand,
+    });
+    const endpointHealth = await checkOpenClawEndpointHealth({
+      endpoint: config.endpoint,
+      healthPath: config.healthPath,
+    });
+
+    let localExecutor = null;
+    if (config.autoRegisterExecutor) {
+      localExecutor = await store.upsertExecutor({
+        executorKey: config.executorKey,
+        kind: config.kind,
+        endpoint: config.endpoint,
+        enabled: true,
+        priority: config.priority,
+      });
+
+      publishQueueEvent(queueBroker, routeContext, {
+        topic: "ops.events.system.openclaw",
+        eventType: "openclaw.executor_registered",
+        eventVersion: "v1",
+        payload: {
+          executorKey: localExecutor.executorKey,
+          endpoint: localExecutor.endpoint,
+          installed: after.installed,
+        },
+      });
+
+      await writeAuditLog(store, req, {
+        entityType: "executor_profile",
+        entityId: localExecutor.executorKey,
+        action: "openclaw.executor.auto_register",
+        metadata: {
+          endpoint: localExecutor.endpoint,
+          kind: localExecutor.kind,
+          priority: localExecutor.priority,
+        },
+      });
+    }
+
+    let repairReceiverSync = null;
+    if (config.syncToRepairReceiver) {
+      repairReceiverSync = await syncExecutorToRepairReceiver({
+        baseUrl: config.repairReceiverBaseUrl,
+        executorPayload: buildRepairReceiverExecutorPayload(config),
+      });
+    }
+
+    await writeAuditLog(store, req, {
+      entityType: "system",
+      entityId: "openclaw",
+      action: "openclaw.install",
+      metadata: {
+        installedBefore: before.installed,
+        installedAfter: after.installed,
+        dryRun: config.dryRun,
+        forceReinstall: config.forceReinstall,
+        commandSource: install.commandSource,
+        installScriptPath,
+        endpoint: config.endpoint,
+        endpointHealthOk: endpointHealth.ok,
+        localExecutorRegistered: Boolean(localExecutor),
+        repairReceiverSyncOk: repairReceiverSync ? repairReceiverSync.ok : null,
+      },
+    });
+
+    publishQueueEvent(queueBroker, routeContext, {
+      topic: "ops.events.system.openclaw",
+      eventType: "openclaw.install.completed",
+      eventVersion: "v1",
+      payload: {
+        installed: after.installed,
+        dryRun: config.dryRun,
+        endpoint: config.endpoint,
+        executorKey: config.executorKey,
+        repairReceiverSyncOk: repairReceiverSync ? repairReceiverSync.ok : null,
+      },
+    });
+
+    return sendJson(res, 200, {
+      ok: true,
+      before,
+      install,
+      after,
+      endpointHealth,
+      localExecutor,
+      repairReceiverSync,
+    });
+  }
+
+  if (method === "GET" && pathname === "/v1/system/queue/topics") {
+    const topics = queueBroker.listTopics();
+    return sendJson(res, 200, {
+      ok: true,
+      count: topics.length,
+      topics,
+    });
+  }
+
+  if (method === "POST" && pathname === "/v1/system/queue/publish") {
+    const body = await readJsonBody(req);
+    const topic = parseTopicValue(body.topic);
+    const envelope = buildEventEnvelope({
+      topic,
+      eventType: String(body.eventType || "").trim() || "generic.event",
+      eventVersion: String(body.eventVersion || "v1"),
+      payload: body.payload && typeof body.payload === "object" && !Array.isArray(body.payload) ? body.payload : {},
+      metadata: body.metadata && typeof body.metadata === "object" && !Array.isArray(body.metadata) ? body.metadata : {},
+      traceId: routeContext.traceContext.traceId,
+      correlationId: body.correlationId ? String(body.correlationId) : null,
+    });
+    queueBroker.publish(topic, envelope);
+    return sendJson(res, 202, {
+      ok: true,
+      topic,
+      eventId: envelope.id,
+    });
+  }
+
+  if (method === "POST" && pathname === "/v1/system/queue/process-next") {
+    const body = await readJsonBody(req);
+    const topic = parseTopicValue(body.topic);
+    const pulled = queueBroker.pull(topic, { limit: 1 });
+    if (pulled.length === 0) {
+      return sendJson(res, 404, {
+        ok: false,
+        errorCode: "ERR-1003",
+        error: "No message available",
+      });
+    }
+
+    const envelope = pulled[0];
+    if (body.fail === true) {
+      const result = queueBroker.nack(topic, envelope, {
+        reason: body.reason ? String(body.reason) : "manual-failure",
+        maxAttempts: asInt(body.maxAttempts, undefined),
+      });
+      return sendJson(res, 200, {
+        ok: true,
+        processed: false,
+        movedToDlq: result.movedToDlq,
+        envelope: result.envelope,
+      });
+    }
+
+    return sendJson(res, 200, {
+      ok: true,
+      processed: true,
+      envelope,
+    });
+  }
+
+  if (method === "GET" && pathname === "/v1/system/queue/dlq") {
+    const topic = parseTopicValue(url.searchParams.get("topic"));
+    const items = queueBroker.peekDlq(topic, {
+      limit: asInt(url.searchParams.get("limit"), 50),
+    });
+    return sendJson(res, 200, {
+      ok: true,
+      topic,
+      count: items.length,
+      items,
+    });
+  }
+
+  if (method === "GET" && pathname === "/v1/audit-logs") {
+    const items = store.listAuditLogs({
+      entityType: url.searchParams.get("entityType") || undefined,
+      entityId: url.searchParams.get("entityId") || undefined,
+      action: url.searchParams.get("action") || undefined,
+      operatorType: url.searchParams.get("operatorType") || undefined,
+      limit: asInt(url.searchParams.get("limit"), 200),
+    });
+    return sendJson(res, 200, {
+      ok: true,
+      count: items.length,
+      items,
     });
   }
 
@@ -265,6 +1120,264 @@ async function handleApiRoute(req, res, store, routeContext, scheduler) {
     const log = buildIngestedLog({ body, source: "frontend", req });
     await store.addLog(log);
     return sendJson(res, 201, { ok: true, logId: log.id, traceId: log.traceId });
+  }
+
+  if (method === "GET" && pathname === "/v1/config/executors") {
+    const enabled = parseBooleanQuery(url.searchParams.get("enabled"), "enabled");
+    const executors = store.listExecutors({
+      enabled,
+      kind: url.searchParams.get("kind") || undefined,
+      limit: asInt(url.searchParams.get("limit"), 200),
+    });
+    return sendJson(res, 200, {
+      ok: true,
+      count: executors.length,
+      executors,
+    });
+  }
+
+  if (method === "POST" && pathname === "/v1/config/executors") {
+    const body = await readJsonBody(req);
+    const profile = validateExecutorProfile(body);
+    const executor = await store.upsertExecutor(profile);
+    publishQueueEvent(queueBroker, routeContext, {
+      topic: "ops.events.config.executor",
+      eventType: "config.executor.upserted",
+      eventVersion: "v1",
+      payload: {
+        executorKey: executor.executorKey,
+        kind: executor.kind,
+        enabled: executor.enabled,
+        priority: executor.priority,
+      },
+    });
+    await writeAuditLog(store, req, {
+      entityType: "executor_profile",
+      entityId: executor.executorKey,
+      action: "config.executor.upsert",
+      metadata: {
+        kind: executor.kind,
+        endpoint: executor.endpoint,
+        enabled: executor.enabled,
+        priority: executor.priority,
+      },
+    });
+    return sendJson(res, 200, {
+      ok: true,
+      executor,
+    });
+  }
+
+  if (method === "GET" && pathname === "/v1/config/projects") {
+    const projects = store.listProjects({
+      status: url.searchParams.get("status") || undefined,
+      limit: asInt(url.searchParams.get("limit"), 200),
+    });
+    return sendJson(res, 200, {
+      ok: true,
+      count: projects.length,
+      projects,
+    });
+  }
+
+  if (method === "POST" && pathname === "/v1/config/projects") {
+    const body = await readJsonBody(req);
+    const profile = validateProjectProfile(body);
+    const project = await store.upsertProject(profile);
+    publishQueueEvent(queueBroker, routeContext, {
+      topic: "ops.events.config.project",
+      eventType: "config.project.upserted",
+      eventVersion: "v1",
+      payload: {
+        projectKey: project.projectKey,
+        defaultBranch: project.defaultBranch,
+        status: project.status,
+      },
+    });
+    await writeAuditLog(store, req, {
+      entityType: "project",
+      entityId: project.projectKey,
+      action: "config.project.upsert",
+      metadata: {
+        repoUrl: project.repoUrl,
+        defaultBranch: project.defaultBranch,
+        status: project.status,
+      },
+    });
+    return sendJson(res, 200, {
+      ok: true,
+      project,
+    });
+  }
+
+  if (method === "GET" && pathname === "/v1/config/model-policies") {
+    const policies = store.listModelPolicies({
+      projectKey: url.searchParams.get("projectKey") || undefined,
+      defaultModelTier: url.searchParams.get("defaultModelTier") || undefined,
+      limit: asInt(url.searchParams.get("limit"), 200),
+    });
+    return sendJson(res, 200, {
+      ok: true,
+      count: policies.length,
+      policies,
+    });
+  }
+
+  if (method === "POST" && pathname === "/v1/config/model-policies") {
+    const body = await readJsonBody(req);
+    const policyPayload = validateModelPolicy(body);
+    const policy = await store.upsertModelPolicy(policyPayload);
+    publishQueueEvent(queueBroker, routeContext, {
+      topic: "ops.events.config.model_policy",
+      eventType: "config.model_policy.upserted",
+      eventVersion: "v1",
+      payload: {
+        projectKey: policy.projectKey,
+        policyName: policy.policyName,
+        defaultModelTier: policy.defaultModelTier,
+      },
+    });
+    await writeAuditLog(store, req, {
+      entityType: "model_policy",
+      entityId: `${policy.projectKey}:${policy.policyName}`,
+      action: "config.model_policy.upsert",
+      metadata: {
+        defaultModelTier: policy.defaultModelTier,
+        budgetDailyTokens: policy.budgetDailyTokens,
+        budgetTaskTokens: policy.budgetTaskTokens,
+      },
+    });
+    return sendJson(res, 200, {
+      ok: true,
+      policy,
+    });
+  }
+
+  if (method === "GET" && pathname === "/v1/issues") {
+    const issues = store.listIssues({
+      projectKey: url.searchParams.get("projectKey") || undefined,
+      status: url.searchParams.get("status") || undefined,
+      sourceType: url.searchParams.get("sourceType") || undefined,
+      limit: asInt(url.searchParams.get("limit"), 200),
+    });
+
+    return sendJson(res, 200, {
+      ok: true,
+      count: issues.length,
+      issues,
+    });
+  }
+
+  if (method === "GET" && pathname.startsWith("/v1/issues/")) {
+    const suffix = pathname.replace("/v1/issues/", "");
+    if (suffix && !suffix.includes("/")) {
+      const issueId = decodeURIComponent(suffix);
+      const issue = store.getIssueById(issueId);
+      if (!issue) {
+        return sendJson(res, 404, {
+          ok: false,
+          errorCode: "ERR-1003",
+          error: "Issue not found",
+        });
+      }
+
+      const timeline = issue.traceId
+        ? store.listLogs({
+            traceId: issue.traceId,
+            limit: 200,
+          })
+        : [];
+
+      return sendJson(res, 200, {
+        ok: true,
+        issue,
+        timeline,
+      });
+    }
+  }
+
+  if (method === "POST" && pathname === "/v1/events") {
+    const body = await readJsonBody(req);
+    const eventPayload = validateEventIngestPayload(body);
+    const idempotencyKey = normalizeHeaderValue(req.headers["idempotency-key"]).trim();
+    const requestHash = payloadHash(eventPayload);
+
+    const idempotencyStatus = store.checkIdempotencyKey(idempotencyKey, requestHash);
+    if (idempotencyStatus.status === "conflict") {
+      await writeAuditLog(store, req, {
+        entityType: "event",
+        entityId: eventPayload.eventId,
+        action: "event.idempotency_conflict",
+        metadata: {
+          issueId: idempotencyStatus.issueId || null,
+          idempotencyKey: idempotencyKey || null,
+        },
+      });
+      return sendJson(res, 400, {
+        ok: false,
+        errorCode: "ERR-1002",
+        error: "Idempotency key conflicts with different request payload",
+        issueId: idempotencyStatus.issueId || null,
+      });
+    }
+    if (idempotencyStatus.status === "replay") {
+      await writeAuditLog(store, req, {
+        entityType: "event",
+        entityId: eventPayload.eventId,
+        action: "event.idempotency_replay",
+        metadata: {
+          issueId: idempotencyStatus.issueId || null,
+          idempotencyKey: idempotencyKey || null,
+        },
+      });
+      return sendJson(res, 202, {
+        ok: true,
+        issueId: idempotencyStatus.issueId,
+        deduplicated: true,
+        idempotencyReplayed: true,
+      });
+    }
+
+    const issueResult = await store.createOrGetIssueFromEvent(eventPayload);
+
+    if (!issueResult.deduplicated) {
+      const eventLog = buildEventIngestLog(eventPayload, req);
+      await store.addLog(eventLog);
+    }
+
+    if (idempotencyKey) {
+      await store.bindIdempotencyKey(idempotencyKey, requestHash, issueResult.issue.id);
+    }
+
+    await writeAuditLog(store, req, {
+      entityType: "issue",
+      entityId: issueResult.issue.id,
+      action: issueResult.deduplicated ? "issue.deduplicated" : "issue.created",
+      metadata: {
+        projectKey: issueResult.issue.projectKey,
+        eventId: issueResult.issue.eventId,
+        sourceType: issueResult.issue.sourceType,
+      },
+    });
+    publishQueueEvent(queueBroker, routeContext, {
+      topic: "ops.events.issue.lifecycle",
+      eventType: issueResult.deduplicated ? "issue.deduplicated" : "issue.created",
+      eventVersion: "v1",
+      correlationId: issueResult.issue.id,
+      payload: {
+        issueId: issueResult.issue.id,
+        projectKey: issueResult.issue.projectKey,
+        eventId: issueResult.issue.eventId,
+        sourceType: issueResult.issue.sourceType,
+        deduplicated: issueResult.deduplicated,
+      },
+    });
+
+    return sendJson(res, 202, {
+      ok: true,
+      issueId: issueResult.issue.id,
+      deduplicated: issueResult.deduplicated,
+    });
   }
 
   if (method === "POST" && pathname === "/v1/logs/backend") {
@@ -491,6 +1604,14 @@ async function handleApiRoute(req, res, store, routeContext, scheduler) {
       });
     }
     await store.reset();
+    queueBroker.reset();
+    await writeAuditLog(store, req, {
+      entityType: "system",
+      entityId: "trace-log-platform",
+      action: "system.reset",
+      metadata: { confirmed: true },
+      operatorType: "human",
+    });
     return sendJson(res, 200, { ok: true, message: "system data reset" });
   }
 
@@ -516,11 +1637,20 @@ export async function startServer({
   port = DEFAULT_PORT,
   host = DEFAULT_HOST,
   dataFilePath = DEFAULT_DATA_FILE,
+  enableSqliteAudit = process.env.ENABLE_SQLITE_AUDIT === "1",
+  auditDbPath = process.env.AUDIT_DB_PATH || DEFAULT_AUDIT_DB_FILE,
+  queueMaxAttempts = DEFAULT_QUEUE_MAX_ATTEMPTS,
   enableAutoAnalyze = process.env.AUTO_ANALYZE !== "0",
   analyzeIntervalMs = asInt(process.env.ANALYZE_INTERVAL_MS, 30000),
 } = {}) {
-  const store = new FileBackedStore(dataFilePath);
+  const auditSink = enableSqliteAudit ? new SqliteAuditSink(auditDbPath) : null;
+  if (auditSink) {
+    await auditSink.init();
+  }
+
+  const store = new FileBackedStore(dataFilePath, { auditSink });
   await store.init();
+  const queueBroker = new InMemoryTopicQueue({ maxAttempts: queueMaxAttempts });
 
   const scheduler = new AnalysisScheduler({
     store,
@@ -552,7 +1682,7 @@ export async function startServer({
         statusCode: null,
       });
 
-      const result = await handleApiRoute(req, res, store, routeContext, scheduler);
+      const result = await handleApiRoute(req, res, store, routeContext, scheduler, queueBroker);
       if (result === false) {
         sendJson(res, 404, {
           ok: false,
@@ -581,6 +1711,7 @@ export async function startServer({
       sendJson(res, statusCode, {
         ok: false,
         traceId: routeContext.traceContext.traceId,
+        errorCode: error.errorCode || null,
         error: error.message || "Internal Server Error",
       });
     }
@@ -591,6 +1722,7 @@ export async function startServer({
   return {
     server,
     store,
+    queueBroker,
     scheduler,
     port: server.address().port,
     close: () =>
