@@ -12,14 +12,14 @@ function renderTraces(traces) {
     <table>
       <thead>
         <tr>
-          <th>TraceId</th>
-          <th>Status</th>
-          <th>Service</th>
-          <th>Logs</th>
-          <th>Errors</th>
-          <th>Duration(ms)</th>
-          <th>Started</th>
-          <th>Action</th>
+          <th>链路ID</th>
+          <th>状态</th>
+          <th>服务</th>
+          <th>日志数</th>
+          <th>错误数</th>
+          <th>耗时(ms)</th>
+          <th>开始时间</th>
+          <th>操作</th>
         </tr>
       </thead>
       <tbody>
@@ -44,17 +44,27 @@ function renderTraces(traces) {
   `;
 }
 
-async function loadTraceDetail(traceId) {
-  const data = await api(`/v1/traces/${encodeURIComponent(traceId)}`);
+async function loadTraceDetail(traceId, getScope) {
+  const scope = typeof getScope === "function" ? getScope() : {};
+  const qs = new URLSearchParams();
+  if (scope?.projectKey) {
+    qs.set("projectKey", scope.projectKey);
+  }
+  const url = qs.toString() ? `/v1/traces/${encodeURIComponent(traceId)}?${qs.toString()}` : `/v1/traces/${encodeURIComponent(traceId)}`;
+  const data = await api(url);
   document.getElementById("trace-detail").textContent = JSON.stringify(data, null, 2);
 }
 
-async function queryTraces() {
+async function queryTraces(getScope) {
   const service = document.getElementById("trace-filter-service").value.trim();
   const status = document.getElementById("trace-filter-status").value;
   const keyword = document.getElementById("trace-filter-keyword").value.trim();
+  const scope = typeof getScope === "function" ? getScope() : {};
 
   const qs = new URLSearchParams();
+  if (scope?.projectKey) {
+    qs.set("projectKey", scope.projectKey);
+  }
   if (service) {
     qs.set("service", service);
   }
@@ -70,9 +80,9 @@ async function queryTraces() {
   renderTraces(data.traces);
 }
 
-export function mountTracesModule(log) {
+export function mountTracesModule(log, getScope) {
   document.getElementById("btn-query-traces").addEventListener("click", () => {
-    queryTraces().catch((error) => log("链路查询失败", error.message));
+    queryTraces(getScope).catch((error) => log("链路查询失败", error.message));
   });
 
   document.getElementById("btn-load-trace").addEventListener("click", () => {
@@ -81,7 +91,7 @@ export function mountTracesModule(log) {
       log("加载链路失败", "traceId 为空");
       return;
     }
-    loadTraceDetail(traceId)
+    loadTraceDetail(traceId, getScope)
       .then(() => log("链路详情已加载", traceId))
       .catch((error) => log("加载链路失败", error.message));
   });
@@ -93,12 +103,12 @@ export function mountTracesModule(log) {
     }
     const traceId = target.getAttribute("data-trace-id");
     document.getElementById("trace-id-input").value = traceId;
-    loadTraceDetail(traceId)
+    loadTraceDetail(traceId, getScope)
       .then(() => log("链路详情已加载", traceId))
       .catch((error) => log("加载链路失败", error.message));
   });
 
   return {
-    refresh: queryTraces,
+    refresh: () => queryTraces(getScope),
   };
 }

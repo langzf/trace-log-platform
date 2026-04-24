@@ -7,12 +7,14 @@
     "start": "node src/server.js",
     "test": "node --test test/*.test.js",
     "smoke": "node scripts/smoke-test.js",
+    "sdk:package": "node scripts/build-sdk-packages.js",
     "db:migrate": "node scripts/db/migrate.js up",
     "db:migrate:status": "node scripts/db/migrate.js status",
     "db:migrate:down": "node scripts/db/migrate.js down --steps 1",
     "db:explain": "node scripts/db/explain-check.js",
     "openclaw:install": "node scripts/openclaw/one-click-install.js",
-    "openclaw:install:dry": "node scripts/openclaw/one-click-install.js --dry-run"
+    "openclaw:install:dry": "node scripts/openclaw/one-click-install.js --dry-run",
+    "log-agent:start": "node scripts/log-agent/file-shipper.js"
   },
   "engines": {
     "node": ">=20"

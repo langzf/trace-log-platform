@@ -1,6 +1,6 @@
 import http from "node:http";
 
-import { createBackendLogClient } from "@traceai/backend-sdk";
+import { createBackendLogClient } from "@traceai/trace-log-sdk";
 
 const client = createBackendLogClient({
   platformBaseUrl: "https://trace.example.com",

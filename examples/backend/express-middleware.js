@@ -1,6 +1,6 @@
 import express from "express";
 
-import { createBackendLogClient } from "@traceai/backend-sdk";
+import { createBackendLogClient } from "@traceai/trace-log-sdk";
 
 const app = express();
 const logClient = createBackendLogClient({

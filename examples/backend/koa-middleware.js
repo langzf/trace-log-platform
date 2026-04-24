@@ -1,7 +1,7 @@
 import Koa from "koa";
 import Router from "@koa/router";
 
-import { createBackendLogClient } from "@traceai/backend-sdk";
+import { createBackendLogClient } from "@traceai/trace-log-sdk";
 
 const app = new Koa();
 const router = new Router();

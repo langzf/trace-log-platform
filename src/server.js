@@ -14,6 +14,7 @@ import {
   runOpenClawInstall,
   syncExecutorToRepairReceiver,
 } from "./core/openclaw-manager.js";
+import { LogCollectorEngine } from "./core/log-collector-engine.js";
 import { SqliteAuditSink } from "./core/sqlite-audit-sink.js";
 import { FileBackedStore } from "./core/storage.js";
 import { InMemoryTopicQueue } from "./core/topic-queue.js";
@@ -28,6 +29,7 @@ const DEFAULT_DATA_FILE = path.join(__dirname, "..", "data", "platform-store.jso
 const DEFAULT_AUDIT_DB_FILE = path.join(__dirname, "..", "data", "platform.db");
 const FRONTEND_SDK_FILE = path.join(__dirname, "sdk", "frontend-sdk.js");
 const PUBLIC_DIR = path.join(__dirname, "..", "public");
+const DEFAULT_PACKAGE_CATALOG_FILE = path.join(PUBLIC_DIR, "packages", "index.json");
 const DEFAULT_QUEUE_MAX_ATTEMPTS = asInt(process.env.QUEUE_MAX_ATTEMPTS, 3);
 const DEFAULT_OPENCLAW_INSTALL_SCRIPT =
   process.env.OPENCLAW_INSTALL_SCRIPT || path.join(__dirname, "..", "scripts", "openclaw", "install_openclaw.sh");
@@ -66,11 +68,21 @@ const CONTENT_TYPE_BY_EXT = {
   ".js": "application/javascript; charset=utf-8",
   ".css": "text/css; charset=utf-8",
   ".json": "application/json; charset=utf-8",
+  ".md": "text/markdown; charset=utf-8",
+  ".txt": "text/plain; charset=utf-8",
+  ".yml": "text/yaml; charset=utf-8",
+  ".yaml": "text/yaml; charset=utf-8",
+  ".toml": "text/plain; charset=utf-8",
   ".svg": "image/svg+xml",
   ".png": "image/png",
   ".jpg": "image/jpeg",
   ".jpeg": "image/jpeg",
   ".ico": "image/x-icon",
+  ".jar": "application/java-archive",
+  ".whl": "application/zip",
+  ".tgz": "application/gzip",
+  ".gz": "application/gzip",
+  ".zip": "application/zip",
 };
 
 function sendJson(res, statusCode, payload) {
@@ -204,6 +216,23 @@ async function readJsonBody(req) {
   }
 }
 
+async function readRawBody(req) {
+  const chunks = [];
+  let size = 0;
+
+  for await (const chunk of req) {
+    size += chunk.length;
+    if (size > MAX_BODY_BYTES) {
+      const error = new Error("Payload too large");
+      error.statusCode = 413;
+      throw error;
+    }
+    chunks.push(chunk);
+  }
+
+  return Buffer.concat(chunks);
+}
+
 async function maybeServeStatic(urlPath, res) {
   if (urlPath === "/sdk/frontend.js") {
     const content = await fs.readFile(FRONTEND_SDK_FILE, "utf8");
@@ -295,6 +324,172 @@ function safeError(error) {
     name: error.name || "Error",
     message: error.message || String(error),
     stack: error.stack || "",
+  };
+}
+
+function normalizeDownloadPath(value) {
+  const raw = String(value || "").trim();
+  if (!raw) {
+    return "";
+  }
+  if (/^https?:\/\//i.test(raw)) {
+    const parsed = new URL(raw);
+    return parsed.pathname || "";
+  }
+  return raw.startsWith("/") ? raw : `/${raw}`;
+}
+
+function normalizePackageFile(file) {
+  if (!file || typeof file !== "object" || Array.isArray(file)) {
+    return null;
+  }
+
+  const fileName = String(file.fileName || "").trim();
+  const downloadPath = normalizeDownloadPath(file.downloadPath || file.relativePath || file.fileName);
+  if (!fileName || !downloadPath) {
+    return null;
+  }
+
+  const sizeNum = Number(file.sizeBytes);
+  return {
+    fileName,
+    relativePath: String(file.relativePath || "").trim(),
+    downloadPath,
+    sizeBytes: Number.isFinite(sizeNum) && sizeNum >= 0 ? Math.trunc(sizeNum) : 0,
+    sha256: String(file.sha256 || "").trim(),
+    contentType: String(file.contentType || "application/octet-stream"),
+  };
+}
+
+function normalizePackageEntry(entry) {
+  if (!entry || typeof entry !== "object" || Array.isArray(entry)) {
+    return null;
+  }
+
+  const language = String(entry.language || "").trim();
+  const packageName = String(entry.packageName || "").trim();
+  if (!language || !packageName) {
+    return null;
+  }
+
+  const files = Array.isArray(entry.files) ? entry.files.map(normalizePackageFile).filter(Boolean) : [];
+  if (files.length === 0) {
+    return null;
+  }
+
+  const commands = Array.isArray(entry.installCommands)
+    ? entry.installCommands.map((item) => String(item || "").trim()).filter(Boolean)
+    : [];
+
+  return {
+    key: entry.key ? String(entry.key) : `${language}:${packageName}`,
+    language,
+    ecosystem: String(entry.ecosystem || "").trim() || "generic",
+    packageName,
+    version: String(entry.version || "").trim() || "unknown",
+    summary: String(entry.summary || "").trim(),
+    installCommands: commands,
+    files,
+  };
+}
+
+async function readPackageCatalog(packageCatalogFilePath) {
+  try {
+    const text = await fs.readFile(packageCatalogFilePath, "utf8");
+    const parsed = JSON.parse(text);
+    const packages = Array.isArray(parsed.packages) ? parsed.packages.map(normalizePackageEntry).filter(Boolean) : [];
+
+    return {
+      schemaVersion: String(parsed.schemaVersion || "v1"),
+      generatedAt: parsed.generatedAt ? String(parsed.generatedAt) : null,
+      buildCommand: String(parsed.buildCommand || "npm run sdk:package"),
+      warnings: Array.isArray(parsed.warnings) ? parsed.warnings.map((item) => String(item || "")) : [],
+      packages,
+    };
+  } catch (error) {
+    if (error.code === "ENOENT") {
+      return {
+        schemaVersion: "v1",
+        generatedAt: null,
+        buildCommand: "npm run sdk:package",
+        warnings: ["Package catalog not found. Build packages first."],
+        packages: [],
+      };
+    }
+    throw error;
+  }
+}
+
+function resolveBaseUrl(req) {
+  const protoHeader = normalizeHeaderValue(req.headers["x-forwarded-proto"]).split(",")[0].trim().toLowerCase();
+  const protocol = protoHeader === "https" ? "https" : "http";
+  const host = normalizeHeaderValue(req.headers.host).trim() || `${DEFAULT_HOST}:${DEFAULT_PORT}`;
+  return `${protocol}://${host}`;
+}
+
+function detectLevelFromText(text) {
+  const value = String(text || "").toLowerCase();
+  if (/(fatal|panic|uncaught|exception|error)/.test(value)) {
+    return "error";
+  }
+  if (/(warn|degraded|slow)/.test(value)) {
+    return "warn";
+  }
+  if (/(debug|trace)/.test(value)) {
+    return "debug";
+  }
+  return "info";
+}
+
+function detectTraceIdFromText(text) {
+  const value = String(text || "");
+  const match =
+    value.match(/\btrace(?:Id|_id|ID)?[=: ]([a-zA-Z0-9_-]{8,})/) ||
+    value.match(/\bx-request-id[=: ]([a-zA-Z0-9_-]{8,})/i) ||
+    value.match(/\brequestId[=: ]([a-zA-Z0-9_-]{8,})/i);
+  return match ? match[1] : null;
+}
+
+function parseSyslogLine(line) {
+  const raw = String(line || "").trim();
+  if (!raw) {
+    return null;
+  }
+  try {
+    const obj = JSON.parse(raw);
+    if (obj && typeof obj === "object" && !Array.isArray(obj)) {
+      return {
+        level: obj.level || obj.severity || detectLevelFromText(raw),
+        message: obj.message || obj.msg || raw,
+        traceId: obj.traceId || obj.trace_id || obj.requestId || detectTraceIdFromText(raw),
+        timestamp: obj.timestamp || obj.time || obj["@timestamp"] || null,
+        path: obj.path || obj.url || null,
+        method: obj.method || null,
+        statusCode: obj.statusCode || obj.status || null,
+        error:
+          obj.error && typeof obj.error === "object"
+            ? obj.error
+            : obj.error
+              ? { name: "Error", message: String(obj.error), stack: "" }
+              : null,
+        meta: {
+          parsedFrom: "json",
+        },
+      };
+    }
+  } catch {
+    // ignore parse error
+  }
+  return {
+    level: detectLevelFromText(raw),
+    message: raw,
+    traceId: detectTraceIdFromText(raw),
+    timestamp: null,
+    path: null,
+    method: null,
+    statusCode: null,
+    error: null,
+    meta: {},
   };
 }
 
@@ -419,11 +614,14 @@ function validateProjectProfile(body) {
     throw createClientError("status cannot be empty");
   }
 
+  const services = parseStringArray(body.services, "services");
+
   return {
     projectKey,
     repoUrl,
     defaultBranch,
     status,
+    services,
   };
 }
 
@@ -474,6 +672,145 @@ function validateModelPolicy(body) {
     upgradeRules: body.upgradeRules,
     budgetDailyTokens,
     budgetTaskTokens,
+  };
+}
+
+function parseStringArray(value, fieldName) {
+  if (value === undefined || value === null) {
+    return undefined;
+  }
+  if (!Array.isArray(value)) {
+    throw createClientError(`${fieldName} must be an array`);
+  }
+  return value.map((item) => String(item || "").trim()).filter(Boolean);
+}
+
+function validateObjectField(value, fieldName) {
+  if (value === undefined || value === null) {
+    return undefined;
+  }
+  if (!value || typeof value !== "object" || Array.isArray(value)) {
+    throw createClientError(`${fieldName} must be an object`);
+  }
+  return value;
+}
+
+function validateLogCollectorProfile(body) {
+  if (!body || typeof body !== "object" || Array.isArray(body)) {
+    throw createClientError("payload must be an object");
+  }
+
+  const collectorKey = String(body.collectorKey || "").trim();
+  if (!collectorKey) {
+    throw createClientError("collectorKey is required");
+  }
+
+  const projectKey = String(body.projectKey || "").trim();
+  if (!projectKey) {
+    throw createClientError("projectKey is required");
+  }
+
+  const service = String(body.service || "").trim();
+  if (!service) {
+    throw createClientError("service is required");
+  }
+
+  const mode = String(body.mode || "local_file").trim();
+  if (!["local_file", "command_pull", "journald", "oss_pull", "syslog_http"].includes(mode)) {
+    throw createClientError("mode must be one of local_file/command_pull/journald/oss_pull/syslog_http");
+  }
+
+  let enabled;
+  if (body.enabled !== undefined) {
+    if (typeof body.enabled !== "boolean") {
+      throw createClientError("enabled must be boolean");
+    }
+    enabled = body.enabled;
+  }
+
+  const pollIntervalSecRaw = body.pollIntervalSec === undefined ? undefined : Number(body.pollIntervalSec);
+  if (body.pollIntervalSec !== undefined && (!Number.isFinite(pollIntervalSecRaw) || pollIntervalSecRaw < 10)) {
+    throw createClientError("pollIntervalSec must be a number >= 10");
+  }
+
+  const source = validateObjectField(body.source, "source") || {};
+  if (mode === "local_file") {
+    const filePath = String(source.filePath || "").trim();
+    if (!filePath) {
+      throw createClientError("source.filePath is required when mode=local_file");
+    }
+  }
+  if (mode === "command_pull") {
+    const command = String(source.command || "").trim();
+    if (!command) {
+      throw createClientError("source.command is required when mode=command_pull");
+    }
+  }
+  if (mode === "journald") {
+    const unit = String(source.unit || "").trim();
+    const command = String(source.command || "").trim();
+    if (!unit && !command) {
+      throw createClientError("source.unit or source.command is required when mode=journald");
+    }
+  }
+  if (mode === "oss_pull") {
+    const objectUrl = String(source.objectUrl || "").trim();
+    if (!objectUrl) {
+      throw createClientError("source.objectUrl is required when mode=oss_pull");
+    }
+  }
+  if (mode === "syslog_http") {
+    if (source.token !== undefined && String(source.token || "").trim().length === 0) {
+      throw createClientError("source.token cannot be empty when mode=syslog_http");
+    }
+  }
+
+  const parse = validateObjectField(body.parse, "parse");
+  if (parse && parse.format !== undefined) {
+    const format = String(parse.format).trim();
+    if (!["auto", "json", "nginx_access", "plain"].includes(format)) {
+      throw createClientError("parse.format must be one of auto/json/nginx_access/plain");
+    }
+  }
+
+  const options = validateObjectField(body.options, "options") || {};
+  if (options.maxLinesPerRun !== undefined) {
+    const num = Number(options.maxLinesPerRun);
+    if (!Number.isFinite(num) || num <= 0) {
+      throw createClientError("options.maxLinesPerRun must be a positive number");
+    }
+  }
+  if (options.maxLinesPerPush !== undefined) {
+    const num = Number(options.maxLinesPerPush);
+    if (!Number.isFinite(num) || num <= 0) {
+      throw createClientError("options.maxLinesPerPush must be a positive number");
+    }
+  }
+  if (options.includePatterns !== undefined) {
+    parseStringArray(options.includePatterns, "options.includePatterns");
+  }
+  if (options.excludePatterns !== undefined) {
+    parseStringArray(options.excludePatterns, "options.excludePatterns");
+  }
+  if (options.staticMeta !== undefined) {
+    validateObjectField(options.staticMeta, "options.staticMeta");
+  }
+
+  const state = validateObjectField(body.state, "state");
+  const tags = parseStringArray(body.tags, "tags");
+
+  return {
+    collectorKey,
+    projectKey,
+    service,
+    mode,
+    enabled,
+    pollIntervalSec: pollIntervalSecRaw === undefined ? undefined : Math.trunc(pollIntervalSecRaw),
+    source,
+    parse,
+    options,
+    state,
+    tags,
   };
 }
 
@@ -774,21 +1111,33 @@ async function writeSyntheticDownstreamLog(store, routeContext, req, message, le
   });
 }
 
-function dashboardPayload(store, scheduler) {
+function dashboardPayload(store, scheduler, { projectKey } = {}) {
   return {
     generatedAt: nowIso(),
-    overview: store.getOverview({ minutes: 60 }),
-    errorTrend: store.getErrorTrend({ hours: 24, bucketMinutes: 60 }),
-    services: store.getServiceOverview({ minutes: 60 }),
-    topErrors: store.getTopErrors({ limit: 8, hours: 24 }),
-    traces: store.listTraceSummaries({ limit: 20 }),
-    bugs: store.listBugs().slice(0, 20),
-    repairTasks: store.listRepairTasks().slice(0, 20),
+    scope: {
+      projectKey: projectKey || null,
+    },
+    overview: store.getOverview({ minutes: 60, projectKey }),
+    errorTrend: store.getErrorTrend({ hours: 24, bucketMinutes: 60, projectKey }),
+    services: store.getServiceOverview({ minutes: 60, projectKey }),
+    topErrors: store.getTopErrors({ limit: 8, hours: 24, projectKey }),
+    traces: store.listTraceSummaries({ limit: 20, projectKey }),
+    bugs: store.listBugs({ projectKey }).slice(0, 20),
+    repairTasks: store.listRepairTasks({ projectKey }).slice(0, 20),
     scheduler: scheduler.snapshot(),
   };
 }
 
-async function handleApiRoute(req, res, store, routeContext, scheduler, queueBroker) {
+async function handleApiRoute(
+  req,
+  res,
+  store,
+  routeContext,
+  scheduler,
+  queueBroker,
+  collectorEngine,
+  packageCatalogFilePath,
+) {
   const url = new URL(req.url, `http://${req.headers.host || "localhost"}`);
   const pathname = url.pathname;
   const method = req.method;
@@ -1115,6 +1464,145 @@ async function handleApiRoute(req, res, store, routeContext, scheduler, queueBro
     });
   }
 
+  if (method === "POST" && pathname === "/v1/logs/syslog") {
+    const raw = await readRawBody(req);
+    const contentType = String(req.headers["content-type"] || "").toLowerCase();
+    let collectorKey = normalizeHeaderValue(req.headers["x-collector-key"]).trim();
+    const collectorToken = normalizeHeaderValue(req.headers["x-collector-token"]).trim();
+
+    let lines = [];
+    if (contentType.includes("application/json")) {
+      const text = raw.toString("utf8").trim();
+      if (!text) {
+        throw createClientError("request body cannot be empty");
+      }
+      let body = null;
+      try {
+        body = JSON.parse(text);
+      } catch {
+        throw createClientError("invalid JSON payload");
+      }
+      if (!collectorKey) {
+        collectorKey = String(body.collectorKey || "").trim();
+      }
+      if (Array.isArray(body.lines)) {
+        lines = body.lines.map((item) => String(item || "")).filter(Boolean);
+      } else if (body.message !== undefined) {
+        lines = [String(body.message || "")].filter(Boolean);
+      } else if (typeof body === "object" && body) {
+        lines = [JSON.stringify(body)];
+      }
+    } else {
+      lines = raw
+        .toString("utf8")
+        .split(/\r?\n/)
+        .map((line) => line.trim())
+        .filter(Boolean);
+    }
+
+    if (!collectorKey) {
+      throw createClientError("collectorKey is required via x-collector-key or body.collectorKey");
+    }
+    const collector = store.getLogCollector(collectorKey);
+    if (!collector) {
+      return sendJson(res, 404, {
+        ok: false,
+        errorCode: "ERR-1003",
+        error: "Collector not found",
+      });
+    }
+    if (collector.mode !== "syslog_http") {
+      throw createClientError(`collector ${collectorKey} is not syslog_http mode`);
+    }
+    if (!collector.enabled) {
+      return sendJson(res, 409, {
+        ok: false,
+        errorCode: "ERR-1002",
+        error: "Collector is disabled",
+      });
+    }
+    const expectedToken = String(collector.source?.token || "").trim();
+    if (expectedToken && collectorToken !== expectedToken) {
+      return sendJson(res, 401, {
+        ok: false,
+        errorCode: "ERR-1002",
+        error: "Invalid collector token",
+      });
+    }
+
+    const maxLines = Math.max(1, asInt(collector.options?.maxLinesPerPush, 2000));
+    const fallbackTraceId = createTraceContext({
+      service: collector.service,
+      source: "backend",
+    }).traceId;
+    const acceptedLines = lines.slice(0, maxLines);
+    const logs = [];
+    for (const line of acceptedLines) {
+      const parsed = parseSyslogLine(line);
+      if (!parsed) {
+        continue;
+      }
+      logs.push({
+        id: generateId("log_", 8),
+        timestamp: parsed.timestamp || nowIso(),
+        source: "backend",
+        service: collector.service,
+        traceId: parsed.traceId || fallbackTraceId,
+        spanId: generateId("sp_", 8),
+        parentSpanId: null,
+        level: parsed.level || "info",
+        message: parsed.message || line,
+        path: parsed.path || null,
+        method: parsed.method || null,
+        statusCode: parsed.statusCode || null,
+        error: parsed.error ? sanitizeError(parsed.error) : null,
+        meta: {
+          projectKey: collector.projectKey,
+          collectorKey: collector.collectorKey,
+          collectorMode: collector.mode,
+          remoteAddress: req.socket?.remoteAddress || null,
+          ...(collector.options?.staticMeta && typeof collector.options.staticMeta === "object"
+            ? collector.options.staticMeta
+            : {}),
+          ...(parsed.meta && typeof parsed.meta === "object" ? parsed.meta : {}),
+        },
+      });
+    }
+
+    if (logs.length > 0) {
+      await store.addLogs(logs);
+    }
+    await store.patchLogCollectorState(collector.collectorKey, {
+      lastRunAt: nowIso(),
+      lastPushAt: nowIso(),
+      lastStatus: "success",
+      lastError: null,
+      lastIngestedCount: logs.length,
+      lastScannedCount: acceptedLines.length,
+    });
+    await store.addCollectorRun({
+      collectorKey: collector.collectorKey,
+      trigger: "push",
+      status: "success",
+      startedAt: nowIso(),
+      finishedAt: nowIso(),
+      scannedCount: acceptedLines.length,
+      ingestedCount: logs.length,
+      message: `syslog push ingested ${logs.length}/${acceptedLines.length}`,
+      metadata: {
+        mode: collector.mode,
+        projectKey: collector.projectKey,
+        service: collector.service,
+      },
+    });
+    return sendJson(res, 201, {
+      ok: true,
+      collectorKey: collector.collectorKey,
+      count: logs.length,
+      dropped: Math.max(0, lines.length - acceptedLines.length),
+    });
+  }
+
   if (method === "POST" && pathname === "/v1/logs/frontend") {
     const body = await readJsonBody(req);
     const log = buildIngestedLog({ body, source: "frontend", req });
@@ -1202,11 +1690,24 @@ async function handleApiRoute(req, res, store, routeContext, scheduler, queueBro
         repoUrl: project.repoUrl,
         defaultBranch: project.defaultBranch,
         status: project.status,
+        services: project.services || [],
       },
     });
     return sendJson(res, 200, {
       ok: true,
       project,
+    });
+  }
+
+  if (method === "GET" && pathname === "/v1/system/contexts") {
+    const contexts = store.listProjectContexts({
+      minutes: asInt(url.searchParams.get("minutes"), 60),
+      includeInactive: parseBooleanValue(url.searchParams.get("includeInactive"), true),
+    });
+    return sendJson(res, 200, {
+      ok: true,
+      count: contexts.length,
+      contexts,
     });
   }
 
@@ -1250,6 +1751,177 @@ async function handleApiRoute(req, res, store, routeContext, scheduler, queueBro
     return sendJson(res, 200, {
       ok: true,
       policy,
+    });
+  }
+
+  if (method === "GET" && pathname === "/v1/integration/packages") {
+    const baseUrl = resolveBaseUrl(req);
+    const catalog = await readPackageCatalog(packageCatalogFilePath);
+    const packages = catalog.packages.map((item) => ({
+      ...item,
+      files: item.files.map((file) => ({
+        ...file,
+        downloadUrl: new URL(file.downloadPath, baseUrl).toString(),
+      })),
+    }));
+    return sendJson(res, 200, {
+      ok: true,
+      schemaVersion: catalog.schemaVersion,
+      generatedAt: catalog.generatedAt,
+      buildCommand: catalog.buildCommand,
+      warnings: catalog.warnings,
+      count: packages.length,
+      packages,
+    });
+  }
+
+  if (method === "GET" && pathname === "/v1/log-collectors/capabilities") {
+    return sendJson(res, 200, {
+      ok: true,
+      modes: [
+        {
+          mode: "local_file",
+          title: "本机文件采集",
+          description: "部署在业务机器同主机时，直接增量读取日志文件",
+          requiredSourceFields: ["filePath"],
+          optionalSourceFields: ["encoding", "fromEndOnFirstRun", "maxReadBytes"],
+        },
+        {
+          mode: "command_pull",
+          title: "命令拉取采集",
+          description: "通过命令执行拉取日志，可用于 ssh 到远端主机读取日志",
+          requiredSourceFields: ["command"],
+          optionalSourceFields: ["timeoutMs", "maxBuffer"],
+          hint: "示例命令: ssh ops@10.0.0.8 'tail -n 500 /var/log/nginx/access.log'",
+        },
+        {
+          mode: "journald",
+          title: "Journald 采集",
+          description: "读取 systemd journal，适合 Linux 服务进程",
+          requiredSourceFields: ["unit"],
+          optionalSourceFields: ["since", "lines", "timeoutMs", "maxBuffer", "command"],
+        },
+        {
+          mode: "oss_pull",
+          title: "OSS 对象拉取",
+          description: "通过 objectUrl 增量 Range 拉取对象日志，适合已归档到 OSS 的系统",
+          requiredSourceFields: ["objectUrl"],
+          optionalSourceFields: ["headers", "encoding", "maxReadBytes", "timeoutMs"],
+        },
+        {
+          mode: "syslog_http",
+          title: "Syslog HTTP",
+          description: "通过 rsyslog/syslog-ng 转发到 HTTP 接口，不改业务代码",
+          requiredSourceFields: [],
+          optionalSourceFields: ["token"],
+          pushEndpoint: "/v1/logs/syslog",
+          requiredHeaders: ["x-collector-key"],
+        },
+      ],
+      parseFormats: ["auto", "json", "nginx_access", "plain"],
+    });
+  }
+
+  if (method === "GET" && pathname === "/v1/config/log-collectors") {
+    const enabled = parseBooleanQuery(url.searchParams.get("enabled"), "enabled");
+    const collectors = store.listLogCollectors({
+      enabled,
+      mode: url.searchParams.get("mode") || undefined,
+      projectKey: url.searchParams.get("projectKey") || undefined,
+      service: url.searchParams.get("service") || undefined,
+      limit: asInt(url.searchParams.get("limit"), 200),
+    });
+    return sendJson(res, 200, {
+      ok: true,
+      count: collectors.length,
+      collectors,
+    });
+  }
+
+  if (method === "POST" && pathname === "/v1/config/log-collectors") {
+    const body = await readJsonBody(req);
+    const profile = validateLogCollectorProfile(body);
+    const collector = await store.upsertLogCollector(profile);
+    await writeAuditLog(store, req, {
+      entityType: "log_collector",
+      entityId: collector.collectorKey,
+      action: "config.log_collector.upsert",
+      metadata: {
+        projectKey: collector.projectKey,
+        service: collector.service,
+        mode: collector.mode,
+        enabled: collector.enabled,
+      },
+    });
+    return sendJson(res, 200, {
+      ok: true,
+      collector,
+    });
+  }
+
+  if (method === "DELETE" && pathname.startsWith("/v1/config/log-collectors/")) {
+    const suffix = pathname.replace("/v1/config/log-collectors/", "");
+    if (suffix && !suffix.includes("/")) {
+      const collectorKey = decodeURIComponent(suffix);
+      const deleted = await store.deleteLogCollector(collectorKey);
+      if (!deleted) {
+        return sendJson(res, 404, {
+          ok: false,
+          errorCode: "ERR-1003",
+          error: "Collector not found",
+        });
+      }
+      await writeAuditLog(store, req, {
+        entityType: "log_collector",
+        entityId: collectorKey,
+        action: "config.log_collector.delete",
+        metadata: {},
+      });
+      return sendJson(res, 200, {
+        ok: true,
+        collectorKey,
+        deleted: true,
+      });
+    }
+  }
+
+  if (method === "POST" && pathname.startsWith("/v1/config/log-collectors/") && pathname.endsWith("/run")) {
+    const collectorKey = decodeURIComponent(pathname.replace("/v1/config/log-collectors/", "").replace("/run", ""));
+    try {
+      const result = await collectorEngine.runCollector(collectorKey, { trigger: "manual" });
+      return sendJson(res, 200, {
+        ok: true,
+        collectorKey,
+        result,
+      });
+    } catch (error) {
+      const statusCode = error.statusCode || 500;
+      return sendJson(res, statusCode, {
+        ok: false,
+        collectorKey,
+        error: error.message || "Collector run failed",
+        run: error.run || null,
+      });
+    }
+  }
+
+  if (method === "GET" && pathname === "/v1/log-collector-runs") {
+    const runs = store.listCollectorRuns({
+      collectorKey: url.searchParams.get("collectorKey") || undefined,
+      status: url.searchParams.get("status") || undefined,
+      limit: asInt(url.searchParams.get("limit"), 200),
+    });
+    return sendJson(res, 200, {
+      ok: true,
+      count: runs.length,
+      runs,
+    });
+  }
+
+  if (method === "GET" && pathname === "/v1/system/collectors/state") {
+    return sendJson(res, 200, {
+      ok: true,
+      scheduler: collectorEngine.snapshot(),
     });
   }
 
@@ -1399,15 +2071,17 @@ async function handleApiRoute(req, res, store, routeContext, scheduler, queueBro
   }
 
   if (method === "GET" && pathname === "/v1/services") {
+    const projectKey = url.searchParams.get("projectKey") || undefined;
     return sendJson(res, 200, {
       ok: true,
-      services: store.listServices(),
+      services: store.listServices({ projectKey }),
     });
   }
 
   if (method === "GET" && pathname.startsWith("/v1/traces/")) {
     const traceId = decodeURIComponent(pathname.replace("/v1/traces/", ""));
-    const logs = store.getTrace(traceId);
+    const projectKey = url.searchParams.get("projectKey") || undefined;
+    const logs = store.getTrace(traceId, { projectKey });
     return sendJson(res, 200, {
       ok: true,
       traceId,
@@ -1417,6 +2091,7 @@ async function handleApiRoute(req, res, store, routeContext, scheduler, queueBro
   }
 
   if (method === "GET" && pathname === "/v1/traces") {
+    const projectKey = url.searchParams.get("projectKey") || undefined;
     const traces = store.listTraceSummaries({
       limit: asInt(url.searchParams.get("limit"), 50),
       status: url.searchParams.get("status") || undefined,
@@ -1424,6 +2099,7 @@ async function handleApiRoute(req, res, store, routeContext, scheduler, queueBro
       from: url.searchParams.get("from") || undefined,
       to: url.searchParams.get("to") || undefined,
       keyword: url.searchParams.get("keyword") || undefined,
+      projectKey,
     });
 
     return sendJson(res, 200, {
@@ -1434,10 +2110,12 @@ async function handleApiRoute(req, res, store, routeContext, scheduler, queueBro
   }
 
   if (method === "GET" && pathname === "/v1/logs") {
+    const projectKey = url.searchParams.get("projectKey") || undefined;
     const logs = store.listLogs({
       traceId: url.searchParams.get("traceId") || undefined,
       level: url.searchParams.get("level") || undefined,
       service: url.searchParams.get("service") || undefined,
+      projectKey,
       source: url.searchParams.get("source") || undefined,
       from: url.searchParams.get("from") || undefined,
       to: url.searchParams.get("to") || undefined,
@@ -1454,12 +2132,14 @@ async function handleApiRoute(req, res, store, routeContext, scheduler, queueBro
 
   if (method === "POST" && pathname === "/v1/analyze") {
     const body = await readJsonBody(req);
-    const result = analyzeExceptionLogs(store.listLogs({ limit: 20000 }), {
+    const projectKey = body.projectKey ? String(body.projectKey) : undefined;
+    const result = analyzeExceptionLogs(store.listLogs({ limit: 20000, projectKey }), {
       since: body.since,
     });
     await store.saveAnalysisResult(result);
     return sendJson(res, 200, {
       ok: true,
+      projectKey: projectKey || null,
       generatedAt: result.generatedAt,
       totalErrorLogs: result.totalErrorLogs,
       bugCount: result.bugReports.length,
@@ -1468,9 +2148,11 @@ async function handleApiRoute(req, res, store, routeContext, scheduler, queueBro
   }
 
   if (method === "GET" && pathname === "/v1/bugs") {
+    const projectKey = url.searchParams.get("projectKey") || undefined;
     const bugs = store.listBugs({
       status: url.searchParams.get("status") || undefined,
       severity: url.searchParams.get("severity") || undefined,
+      projectKey,
     });
     return sendJson(res, 200, {
       ok: true,
@@ -1489,9 +2171,11 @@ async function handleApiRoute(req, res, store, routeContext, scheduler, queueBro
   }
 
   if (method === "GET" && pathname === "/v1/repair-tasks") {
+    const projectKey = url.searchParams.get("projectKey") || undefined;
     const tasks = store.listRepairTasks({
       status: url.searchParams.get("status") || undefined,
       severity: url.searchParams.get("severity") || undefined,
+      projectKey,
     });
     return sendJson(res, 200, {
       ok: true,
@@ -1542,38 +2226,45 @@ async function handleApiRoute(req, res, store, routeContext, scheduler, queueBro
   }
 
   if (method === "GET" && pathname === "/v1/dashboard/overview") {
-    return sendJson(res, 200, { ok: true, overview: store.getOverview({ minutes: 60 }) });
+    const projectKey = url.searchParams.get("projectKey") || undefined;
+    return sendJson(res, 200, { ok: true, overview: store.getOverview({ minutes: 60, projectKey }) });
   }
 
   if (method === "GET" && pathname === "/v1/dashboard/error-trend") {
+    const projectKey = url.searchParams.get("projectKey") || undefined;
     return sendJson(res, 200, {
       ok: true,
       points: store.getErrorTrend({
         hours: asInt(url.searchParams.get("hours"), 24),
         bucketMinutes: asInt(url.searchParams.get("bucketMinutes"), 60),
+        projectKey,
       }),
     });
   }
 
   if (method === "GET" && pathname === "/v1/dashboard/services") {
+    const projectKey = url.searchParams.get("projectKey") || undefined;
     return sendJson(res, 200, {
       ok: true,
-      services: store.getServiceOverview({ minutes: asInt(url.searchParams.get("minutes"), 60) }),
+      services: store.getServiceOverview({ minutes: asInt(url.searchParams.get("minutes"), 60), projectKey }),
     });
   }
 
   if (method === "GET" && pathname === "/v1/dashboard/top-errors") {
+    const projectKey = url.searchParams.get("projectKey") || undefined;
     return sendJson(res, 200, {
       ok: true,
       topErrors: store.getTopErrors({
         limit: asInt(url.searchParams.get("limit"), 10),
         hours: asInt(url.searchParams.get("hours"), 24),
+        projectKey,
       }),
     });
   }
 
   if (method === "GET" && pathname === "/v1/dashboard/full") {
-    return sendJson(res, 200, { ok: true, ...dashboardPayload(store, scheduler) });
+    const projectKey = url.searchParams.get("projectKey") || undefined;
+    return sendJson(res, 200, { ok: true, ...dashboardPayload(store, scheduler, { projectKey }) });
   }
 
   if (method === "POST" && pathname === "/v1/system/analyzer/start") {
@@ -1642,6 +2333,9 @@ export async function startServer({
   queueMaxAttempts = DEFAULT_QUEUE_MAX_ATTEMPTS,
   enableAutoAnalyze = process.env.AUTO_ANALYZE !== "0",
   analyzeIntervalMs = asInt(process.env.ANALYZE_INTERVAL_MS, 30000),
+  enableCollectorScheduler = process.env.ENABLE_LOG_COLLECTOR_SCHEDULER !== "0",
+  collectorTickIntervalMs = asInt(process.env.LOG_COLLECTOR_TICK_INTERVAL_MS, 5000),
+  packageCatalogFilePath = process.env.PACKAGE_CATALOG_FILE || DEFAULT_PACKAGE_CATALOG_FILE,
 } = {}) {
   const auditSink = enableSqliteAudit ? new SqliteAuditSink(auditDbPath) : null;
   if (auditSink) {
@@ -1659,8 +2353,16 @@ export async function startServer({
     maxAnalyzeLogs: 20000,
   });
 
+  const collectorEngine = new LogCollectorEngine({
+    store,
+    tickIntervalMs: collectorTickIntervalMs,
+  });
+
   if (enableAutoAnalyze) {
     scheduler.start();
+  }
+  if (enableCollectorScheduler) {
+    collectorEngine.start();
   }
 
   const server = http.createServer(async (req, res) => {
@@ -1682,7 +2384,16 @@ export async function startServer({
         statusCode: null,
       });
 
-      const result = await handleApiRoute(req, res, store, routeContext, scheduler, queueBroker);
+      const result = await handleApiRoute(
+        req,
+        res,
+        store,
+        routeContext,
+        scheduler,
+        queueBroker,
+        collectorEngine,
+        packageCatalogFilePath,
+      );
       if (result === false) {
         sendJson(res, 404, {
           ok: false,
@@ -1724,11 +2435,13 @@ export async function startServer({
     store,
     queueBroker,
     scheduler,
+    collectorEngine,
     port: server.address().port,
     close: () =>
       new Promise((resolve, reject) =>
         server.close((err) => {
           scheduler.stop();
+          collectorEngine.stop();
           if (err) {
             reject(err);
             return;

@@ -4,7 +4,7 @@ import { badge, escapeHtml, fmtTime } from "./format.js";
 function renderBugs(bugs) {
   const node = document.getElementById("bug-list");
   if (!bugs || bugs.length === 0) {
-    node.innerHTML = "<div class='list-item'>暂无 bug</div>";
+    node.innerHTML = "<div class='list-item'>暂无缺陷</div>";
     return;
   }
 
@@ -14,20 +14,24 @@ function renderBugs(bugs) {
       <div class="list-item">
         <div class="item-title">${escapeHtml(bug.title)}</div>
         <div>${badge(bug.severity)} ${badge(bug.status)}</div>
-        <div>count=${bug.count}, traces=${(bug.traceIds || []).length}</div>
-        <div>summary: ${escapeHtml(bug.summary || "")}</div>
-        <div>hypothesis: ${escapeHtml(bug.rootCauseHypothesis || "")}</div>
-        <div>last seen: ${fmtTime(bug.lastSeen)}</div>
+        <div>次数=${bug.count}，关联链路=${(bug.traceIds || []).length}</div>
+        <div>摘要：${escapeHtml(bug.summary || "")}</div>
+        <div>根因假设：${escapeHtml(bug.rootCauseHypothesis || "")}</div>
+        <div>最近出现：${fmtTime(bug.lastSeen)}</div>
       </div>
     `,
     )
     .join("");
 }
 
-async function queryBugs() {
+async function queryBugs(getScope) {
   const status = document.getElementById("bug-filter-status").value;
   const severity = document.getElementById("bug-filter-severity").value;
+  const scope = typeof getScope === "function" ? getScope() : {};
   const qs = new URLSearchParams();
+  if (scope?.projectKey) {
+    qs.set("projectKey", scope.projectKey);
+  }
   if (status) {
     qs.set("status", status);
   }
@@ -39,12 +43,12 @@ async function queryBugs() {
   renderBugs(data.bugs);
 }
 
-export function mountBugsModule(log) {
+export function mountBugsModule(log, getScope) {
   document.getElementById("btn-query-bugs").addEventListener("click", () => {
-    queryBugs().catch((error) => log("Bug 查询失败", error.message));
+    queryBugs(getScope).catch((error) => log("缺陷查询失败", error.message));
   });
 
   return {
-    refresh: queryBugs,
+    refresh: () => queryBugs(getScope),
   };
 }

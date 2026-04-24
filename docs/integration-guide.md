@@ -11,6 +11,9 @@
 ## 2. Platform Endpoint Contract
 
 - Base URL: `https://trace.example.com`
+- Package registry:
+  - `GET /v1/integration/packages`
+  - Static package files under `/packages/*`
 - Single ingest:
   - `POST /v1/logs/frontend`
   - `POST /v1/logs/backend`
@@ -32,10 +35,25 @@ Forward these headers through your service chain:
 - `x-parent-span-id`
 - `traceparent` (optional, supported)
 
-## 4. Frontend Integration (JavaScript)
+## 4. Download Real SDK Packages
+
+1. Pull package catalog:
+
+```bash
+curl https://trace.example.com/v1/integration/packages
+```
+
+2. Install by package URL:
+
+```bash
+npm install https://trace.example.com/packages/javascript/<tarball>.tgz
+pip install https://trace.example.com/packages/python/<wheel>.whl
+```
+
+## 5. Frontend Integration (JavaScript)
 
 ```html
-<script src="https://trace.example.com/sdk/frontend.js"></script>
+<script src="https://trace.example.com/packages/javascript/trace-log-frontend-sdk-1.0.0.js"></script>
 <script>
   const client = window.TraceLogSDK.createClient({
     platformBaseUrl: "https://trace.example.com",
@@ -47,7 +65,7 @@ Forward these headers through your service chain:
 </script>
 ```
 
-## 5. Backend Integration (Python SDK)
+## 6. Backend Integration (Python SDK)
 
 Install:
 
@@ -78,7 +96,7 @@ Flask/FastAPI middleware examples:
 SDK source package:
 - `sdks/python`
 
-## 6. Backend Integration (Java Spring Boot Starter)
+## 7. Backend Integration (Java Spring Boot Starter)
 
 Maven dependency:
 
@@ -110,7 +128,7 @@ SDK source package:
 - `sdks/java/trace-log-sdk`
 - `sdks/java/trace-log-spring-boot-starter`
 
-## 7. Repair Bot Integration Flow
+## 8. Repair Bot Integration Flow
 
 1. Poll pending tasks: `GET /v1/repair-tasks?status=pending`
 2. Claim task: `POST /v1/repair-tasks/{taskId}/claim`
@@ -119,7 +137,7 @@ SDK source package:
    - `pending -> in_progress -> deployed -> verified`
    - `pending/in_progress -> failed`
 
-## 8. Operational Endpoints
+## 9. Operational Endpoints
 
 - Full dashboard payload: `GET /v1/dashboard/full`
 - Analyzer controls:

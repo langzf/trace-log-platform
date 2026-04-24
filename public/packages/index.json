@@ -1,0 +1,113 @@
+{
+  "schemaVersion": "v1",
+  "generatedAt": "2026-04-23T12:33:13.112Z",
+  "buildCommand": "npm run sdk:package",
+  "packages": [
+    {
+      "key": "javascript-npm",
+      "language": "javascript",
+      "ecosystem": "npm",
+      "packageName": "@traceai/trace-log-sdk",
+      "version": "1.0.0",
+      "summary": "Node.js SDK package for backend service tracing and log reporting.",
+      "installCommands": [
+        "npm install <TRACE_PLATFORM_URL>/packages/javascript/traceai-trace-log-sdk-1.0.0.tgz"
+      ],
+      "files": [
+        {
+          "fileName": "traceai-trace-log-sdk-1.0.0.tgz",
+          "relativePath": "packages/javascript/traceai-trace-log-sdk-1.0.0.tgz",
+          "downloadPath": "/packages/javascript/traceai-trace-log-sdk-1.0.0.tgz",
+          "sizeBytes": 4181,
+          "sha256": "40715500eec11c3864974c29366de6dbb6c02a75667e2748cf8bdf9e153ecf74",
+          "contentType": "application/gzip"
+        }
+      ]
+    },
+    {
+      "key": "javascript-browser-runtime",
+      "language": "javascript",
+      "ecosystem": "browser-script",
+      "packageName": "TraceLogSDK browser runtime",
+      "version": "1.0.0",
+      "summary": "Browser script SDK runtime for non-npm web integration.",
+      "installCommands": [
+        "<script src=\"<TRACE_PLATFORM_URL>/packages/javascript/trace-log-frontend-sdk-1.0.0.js\"></script>"
+      ],
+      "files": [
+        {
+          "fileName": "trace-log-frontend-sdk-1.0.0.js",
+          "relativePath": "packages/javascript/trace-log-frontend-sdk-1.0.0.js",
+          "downloadPath": "/packages/javascript/trace-log-frontend-sdk-1.0.0.js",
+          "sizeBytes": 8106,
+          "sha256": "b4a1695159b878c84a7adcc48f9e86c2d8362d10779cce37998d61b564005096",
+          "contentType": "application/javascript; charset=utf-8"
+        }
+      ]
+    },
+    {
+      "key": "python-wheel",
+      "language": "python",
+      "ecosystem": "pip",
+      "packageName": "trace-log-sdk",
+      "version": "1.0.0",
+      "summary": "Python SDK wheel package for Flask/FastAPI and generic backend services.",
+      "installCommands": [
+        "pip install <TRACE_PLATFORM_URL>/packages/python/trace_log_sdk-1.0.0-py3-none-any.whl"
+      ],
+      "files": [
+        {
+          "fileName": "trace_log_sdk-1.0.0-py3-none-any.whl",
+          "relativePath": "packages/python/trace_log_sdk-1.0.0-py3-none-any.whl",
+          "downloadPath": "/packages/python/trace_log_sdk-1.0.0-py3-none-any.whl",
+          "sizeBytes": 4809,
+          "sha256": "cfb50391ede232d37eaac80b63d5e3a6d75d798757ca90998ce949b4d14334de",
+          "contentType": "application/zip"
+        }
+      ]
+    },
+    {
+      "key": "java-core",
+      "language": "java",
+      "ecosystem": "maven",
+      "packageName": "com.traceai:trace-log-sdk",
+      "version": "1.0.0",
+      "summary": "Java artifact for Trace Log integration.",
+      "installCommands": [
+        "<dependency><groupId>com.traceai</groupId><artifactId>trace-log-sdk</artifactId><version>1.0.0</version></dependency>"
+      ],
+      "files": [
+        {
+          "fileName": "trace-log-sdk-1.0.0.jar",
+          "relativePath": "packages/java/trace-log-sdk-1.0.0.jar",
+          "downloadPath": "/packages/java/trace-log-sdk-1.0.0.jar",
+          "sizeBytes": 9874,
+          "sha256": "3f2f41dab1171d8a840a7c7ee46151fba0f85d04943084c0e398d6294b9e5317",
+          "contentType": "application/java-archive"
+        }
+      ]
+    },
+    {
+      "key": "java-spring-starter",
+      "language": "java",
+      "ecosystem": "maven",
+      "packageName": "com.traceai:trace-log-spring-boot-starter",
+      "version": "1.0.0",
+      "summary": "Java artifact for Trace Log integration.",
+      "installCommands": [
+        "<dependency><groupId>com.traceai</groupId><artifactId>trace-log-spring-boot-starter</artifactId><version>1.0.0</version></dependency>"
+      ],
+      "files": [
+        {
+          "fileName": "trace-log-spring-boot-starter-1.0.0.jar",
+          "relativePath": "packages/java/trace-log-spring-boot-starter-1.0.0.jar",
+          "downloadPath": "/packages/java/trace-log-spring-boot-starter-1.0.0.jar",
+          "sizeBytes": 7261,
+          "sha256": "97d76dd40bfd7e470f6bffea260d31b12bb7f20464e4c99871a452410d4f05f8",
+          "contentType": "application/java-archive"
+        }
+      ]
+    }
+  ],
+  "warnings": []
+}

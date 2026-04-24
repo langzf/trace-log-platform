@@ -5,14 +5,20 @@ function drawTrend(points) {
   const ctx = canvas.getContext("2d");
   const width = canvas.width;
   const height = canvas.height;
+  const css = getComputedStyle(document.documentElement);
+  const colorGrid = css.getPropertyValue("--line").trim() || "rgba(34, 110, 160, 0.25)";
+  const colorTotal = css.getPropertyValue("--primary").trim() || "#0b7dff";
+  const colorError = css.getPropertyValue("--danger").trim() || "#e25757";
+  const colorText = css.getPropertyValue("--ink-1").trim() || "#123149";
+  const panelBg = css.getPropertyValue("--panel-solid").trim() || "#f8fdff";
 
   ctx.clearRect(0, 0, width, height);
-  ctx.fillStyle = "#f8fafc";
+  ctx.fillStyle = panelBg;
   ctx.fillRect(0, 0, width, height);
 
   if (!points || points.length === 0) {
-    ctx.fillStyle = "#64748b";
-    ctx.font = "14px sans-serif";
+    ctx.fillStyle = colorText;
+    ctx.font = "14px Rajdhani, sans-serif";
     ctx.fillText("暂无趋势数据", 20, 30);
     return;
   }
@@ -22,7 +28,7 @@ function drawTrend(points) {
   const chartW = width - pad * 2;
   const chartH = height - pad * 2;
 
-  ctx.strokeStyle = "#d5e0ea";
+  ctx.strokeStyle = colorGrid;
   ctx.lineWidth = 1;
   for (let i = 0; i <= 4; i += 1) {
     const y = pad + (chartH / 4) * i;
@@ -48,11 +54,11 @@ function drawTrend(points) {
     ctx.stroke();
   }
 
-  drawLine("total", "#0b63f3");
-  drawLine("errors", "#c62828");
+  drawLine("total", colorTotal);
+  drawLine("errors", colorError);
 
-  ctx.fillStyle = "#102a43";
-  ctx.font = "12px sans-serif";
+  ctx.fillStyle = colorText;
+  ctx.font = "12px Rajdhani, sans-serif";
   ctx.fillText("蓝线: 总日志", 24, 16);
   ctx.fillText("红线: 错误日志", 122, 16);
 }
@@ -66,13 +72,13 @@ function renderKpi(overview) {
     ["活跃服务", overview.serviceCountInWindow],
     ["待修复任务", overview.pendingTasks],
     ["进行中任务", overview.inProgressTasks],
-    ["Open Bug", overview.openBugCount],
+    ["待修复缺陷", overview.openBugCount],
   ];
 
   document.getElementById("kpi-grid").innerHTML = rows
     .map(
       ([title, value]) =>
-        `<div class="kpi-card"><div class="kpi-title">${title}</div><div class="kpi-value">${value}</div><div class="kpi-sub">last analysis: ${fmtTime(overview.lastAnalysisAt)}</div></div>`,
+        `<div class="kpi-card"><div class="kpi-title">${title}</div><div class="kpi-value">${value}</div><div class="kpi-sub">最近分析：${fmtTime(overview.lastAnalysisAt)}</div></div>`,
     )
     .join("");
 }
@@ -89,9 +95,9 @@ function renderTopErrors(topErrors) {
       (item) => `
       <div class="list-item">
         <div class="item-title">${escapeHtml(item.title)}</div>
-        <div>count: <strong>${item.count}</strong></div>
-        <div>services: ${escapeHtml((item.services || []).join(", ") || "-")}</div>
-        <div>last seen: ${fmtTime(item.lastSeen)}</div>
+        <div>次数：<strong>${item.count}</strong></div>
+        <div>服务：${escapeHtml((item.services || []).join(", ") || "-")}</div>
+        <div>最近出现：${fmtTime(item.lastSeen)}</div>
       </div>
     `,
     )
@@ -109,13 +115,13 @@ function renderServiceHealth(services) {
     <table>
       <thead>
         <tr>
-          <th>Service</th>
-          <th>Status</th>
-          <th>Logs</th>
-          <th>Errors</th>
-          <th>Error Rate</th>
-          <th>P95 (ms)</th>
-          <th>Last Seen</th>
+          <th>服务</th>
+          <th>状态</th>
+          <th>日志数</th>
+          <th>错误数</th>
+          <th>错误率</th>
+          <th>P95延迟(ms)</th>
+          <th>最近出现</th>
         </tr>
       </thead>
       <tbody>
@@ -151,10 +157,10 @@ function renderTaskSnapshot(tasks) {
     .map(
       (task) => `
       <div class="list-item">
-        <div class="item-title">${escapeHtml(task.payload?.title || "untitled")}</div>
-        <div>${badge(task.status)} priority=P${task.priority || 1}</div>
-        <div>assignee: ${escapeHtml(task.assignee || "unassigned")}</div>
-        <div>updated: ${fmtTime(task.updatedAt)}</div>
+        <div class="item-title">${escapeHtml(task.payload?.title || "未命名任务")}</div>
+        <div>${badge(task.status)} 优先级=P${task.priority || 1}</div>
+        <div>处理人：${escapeHtml(task.assignee || "未分配")}</div>
+        <div>更新时间：${fmtTime(task.updatedAt)}</div>
       </div>
     `,
     )

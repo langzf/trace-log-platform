@@ -1,0 +1,29 @@
+{
+  "name": "@traceai/trace-log-sdk",
+  "version": "1.0.0",
+  "description": "Trace Log Platform JavaScript SDK for Node.js and browser integration",
+  "type": "module",
+  "main": "./dist/node/index.js",
+  "exports": {
+    ".": {
+      "import": "./dist/node/index.js"
+    },
+    "./browser": {
+      "import": "./dist/browser/index.js"
+    }
+  },
+  "files": [
+    "dist",
+    "README.md"
+  ],
+  "keywords": [
+    "trace",
+    "logging",
+    "observability",
+    "sdk"
+  ],
+  "license": "MIT",
+  "engines": {
+    "node": ">=18"
+  }
+}

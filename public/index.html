@@ -3,33 +3,47 @@
   <head>
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-    <title>Trace Log Platform Console</title>
+    <title>链路日志平台控制台</title>
+    <link rel="preconnect" href="https://fonts.googleapis.com" />
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+    <link
+      href="https://fonts.googleapis.com/css2?family=Noto+Sans+SC:wght@400;500;700&family=Orbitron:wght@500;700&family=Rajdhani:wght@400;500;700&display=swap"
+      rel="stylesheet"
+    />
     <link rel="stylesheet" href="/styles.css" />
   </head>
   <body>
     <div class="app-shell">
       <aside class="sidebar">
         <div class="brand">
-          <h1>Trace Platform</h1>
-          <p>Observability + Auto Repair</p>
+          <h1>链路日志平台</h1>
+          <p>可观测性与自动修复协同</p>
         </div>
         <nav class="nav" id="nav">
-          <button data-view="dashboard" class="nav-btn is-active">Dashboard</button>
-          <button data-view="traces" class="nav-btn">Trace Explorer</button>
-          <button data-view="bugs" class="nav-btn">Bug Center</button>
-          <button data-view="tasks" class="nav-btn">Task Center</button>
-          <button data-view="integration" class="nav-btn">Integration Hub</button>
-          <button data-view="traffic" class="nav-btn">Traffic Lab</button>
+          <button data-view="dashboard" class="nav-btn is-active">系统总览</button>
+          <button data-view="traces" class="nav-btn">链路追踪</button>
+          <button data-view="bugs" class="nav-btn">缺陷中心</button>
+          <button data-view="tasks" class="nav-btn">任务中心</button>
+          <button data-view="collectors" class="nav-btn">采集中心</button>
+          <button data-view="integration" class="nav-btn">接入中心</button>
+          <button data-view="traffic" class="nav-btn">流量实验室</button>
         </nav>
       </aside>
 
       <main class="main">
         <header class="main-header">
           <div>
-            <h2 id="view-title">Dashboard</h2>
+            <h2 id="view-title">系统总览</h2>
             <p id="view-subtitle">系统全景监控与风险识别</p>
+            <p id="scope-summary" class="scope-summary">当前系统：全部</p>
           </div>
           <div class="header-actions">
+            <div class="scope-control">
+              <label for="scope-project-select">系统范围</label>
+              <select id="scope-project-select" class="input select scope-select">
+                <option value="">全部系统</option>
+              </select>
+            </div>
             <button id="btn-refresh" class="btn btn-primary">刷新</button>
             <button id="btn-analyze" class="btn btn-accent">立即分析</button>
             <button id="btn-start-analyzer" class="btn btn-secondary">开启自动分析</button>
@@ -42,21 +56,21 @@
           <div id="kpi-grid" class="kpi-grid"></div>
           <div class="panel-grid two-col">
             <article class="panel">
-              <h3>24h Error Trend</h3>
+              <h3>24小时异常趋势</h3>
               <canvas id="error-trend" width="900" height="280"></canvas>
             </article>
             <article class="panel">
-              <h3>Top Error Fingerprints</h3>
+              <h3>高频异常指纹</h3>
               <div id="top-errors" class="list"></div>
             </article>
           </div>
           <div class="panel-grid two-col">
             <article class="panel">
-              <h3>Service Health</h3>
+              <h3>服务健康度</h3>
               <div id="service-table"></div>
             </article>
             <article class="panel">
-              <h3>Latest Repair Tasks</h3>
+              <h3>最近修复任务</h3>
               <div id="task-snapshot" class="list"></div>
             </article>
           </div>
@@ -64,24 +78,24 @@
 
         <section id="view-traces" class="view">
           <article class="panel">
-            <h3>Trace Query</h3>
+            <h3>链路查询</h3>
             <div class="toolbar">
-              <input id="trace-filter-service" class="input" placeholder="service (optional)" />
+              <input id="trace-filter-service" class="input" placeholder="服务名（可选）" />
               <select id="trace-filter-status" class="input select">
-                <option value="">status=all</option>
-                <option value="ok">ok</option>
-                <option value="failed">failed</option>
+                <option value="">状态：全部</option>
+                <option value="ok">正常</option>
+                <option value="failed">失败</option>
               </select>
-              <input id="trace-filter-keyword" class="input" placeholder="keyword" />
+              <input id="trace-filter-keyword" class="input" placeholder="关键字" />
               <button id="btn-query-traces" class="btn btn-primary">查询链路</button>
             </div>
             <div id="trace-table"></div>
           </article>
 
           <article class="panel">
-            <h3>Trace Detail</h3>
+            <h3>链路详情</h3>
             <div class="toolbar">
-              <input id="trace-id-input" class="input" placeholder="traceId" />
+              <input id="trace-id-input" class="input" placeholder="链路ID（traceId）" />
               <button id="btn-load-trace" class="btn btn-primary">加载详情</button>
             </div>
             <pre id="trace-detail" class="console"></pre>
@@ -90,21 +104,21 @@
 
         <section id="view-bugs" class="view">
           <article class="panel">
-            <h3>Bug Catalog</h3>
+            <h3>缺陷列表</h3>
             <div class="toolbar">
               <select id="bug-filter-status" class="input select">
-                <option value="">status=all</option>
-                <option value="open">open</option>
-                <option value="fixed">fixed</option>
+                <option value="">状态：全部</option>
+                <option value="open">待修复</option>
+                <option value="fixed">已修复</option>
               </select>
               <select id="bug-filter-severity" class="input select">
-                <option value="">severity=all</option>
-                <option value="critical">critical</option>
-                <option value="high">high</option>
-                <option value="medium">medium</option>
-                <option value="low">low</option>
+                <option value="">严重级别：全部</option>
+                <option value="critical">紧急</option>
+                <option value="high">高</option>
+                <option value="medium">中</option>
+                <option value="low">低</option>
               </select>
-              <button id="btn-query-bugs" class="btn btn-primary">查询 Bug</button>
+              <button id="btn-query-bugs" class="btn btn-primary">查询缺陷</button>
             </div>
             <div id="bug-list" class="list"></div>
           </article>
@@ -112,41 +126,153 @@
 
         <section id="view-tasks" class="view">
           <article class="panel">
-            <h3>Repair Task Board</h3>
+            <h3>修复任务看板</h3>
             <div class="toolbar">
               <select id="task-filter-status" class="input select">
-                <option value="">status=all</option>
-                <option value="pending">pending</option>
-                <option value="in_progress">in_progress</option>
-                <option value="deployed">deployed</option>
-                <option value="verified">verified</option>
-                <option value="failed">failed</option>
+                <option value="">状态：全部</option>
+                <option value="pending">待处理</option>
+                <option value="in_progress">处理中</option>
+                <option value="deployed">已部署</option>
+                <option value="verified">已验证</option>
+                <option value="failed">失败</option>
               </select>
               <button id="btn-query-tasks" class="btn btn-primary">查询任务</button>
-              <button id="btn-claim-first" class="btn btn-warning">领取首个 pending</button>
-              <button id="btn-verify-first" class="btn btn-success">标记首个 in_progress 为 verified</button>
+              <button id="btn-claim-first" class="btn btn-warning">领取首个待处理任务</button>
+              <button id="btn-verify-first" class="btn btn-success">标记首个处理中任务为已验证</button>
             </div>
             <div id="task-list" class="list"></div>
           </article>
         </section>
 
-        <section id="view-integration" class="view">
+        <section id="view-collectors" class="view">
           <article class="panel">
-            <h3>Integration Playbook</h3>
-            <p>优先使用 SDK/Starter 引包接入；HTTP 直调仅作为兜底。示例默认以平台域名 <code>https://trace.example.com</code> 为例。</p>
-            <div class="lang-tabs" id="integration-tabs">
-              <button data-lang="javascript" class="lang-btn is-active">JavaScript</button>
-              <button data-lang="python" class="lang-btn">Python</button>
-              <button data-lang="java" class="lang-btn">Java</button>
-              <button data-lang="curl" class="lang-btn">cURL</button>
-            </div>
-            <pre id="integration-snippet" class="console"></pre>
+            <h3>日志采集配置</h3>
+            <p>支持本机文件增量采集与命令拉取采集（可通过 ssh 拉取远端日志），并绑定 project/service 归属。</p>
+            <form id="collector-form" class="collector-form-grid">
+              <input id="collector-key" class="input" placeholder="采集器键（例如 nginx-prod-a）" required />
+              <input id="collector-project" class="input" placeholder="系统标识（projectKey，例如 order-system）" required />
+              <input id="collector-service" class="input" placeholder="服务名（例如 nginx-gateway）" required />
+              <select id="collector-mode" class="input select">
+                <option value="local_file">本地文件（local_file）</option>
+                <option value="command_pull">命令拉取（command_pull）</option>
+                <option value="journald">Journald（journald）</option>
+                <option value="oss_pull">对象存储拉取（oss_pull）</option>
+                <option value="syslog_http">Syslog HTTP（syslog_http）</option>
+              </select>
+              <input id="collector-poll-interval" class="input" type="number" min="10" value="30" placeholder="轮询间隔（秒）" />
+              <label class="collector-check">
+                <input id="collector-enabled" type="checkbox" checked />
+                启用
+              </label>
+
+              <div id="collector-mode-local" class="collector-mode-grid">
+                <input id="collector-file-path" class="input" placeholder="/var/log/nginx/access.log" />
+                <input id="collector-max-read-bytes" class="input" type="number" min="4096" value="1048576" placeholder="最大读取字节数" />
+                <label class="collector-check">
+                  <input id="collector-from-end" type="checkbox" checked />
+                  首次从文件末尾开始
+                </label>
+              </div>
+
+              <div id="collector-mode-command" class="collector-mode-grid" style="display: none;">
+                <input
+                  id="collector-command"
+                  class="input"
+                  placeholder="ssh ops@10.0.0.8 'tail -n 500 /var/log/nginx/access.log'"
+                />
+                <input id="collector-command-timeout" class="input" type="number" min="1000" value="15000" placeholder="超时时间（毫秒）" />
+              </div>
+
+              <div id="collector-mode-journald" class="collector-mode-grid" style="display: none;">
+                <input id="collector-journal-unit" class="input" placeholder="服务单元（例如 nginx.service）" />
+                <input id="collector-journal-since" class="input" placeholder="起始时间（例如 10 minutes ago）" />
+                <input id="collector-journal-lines" class="input" type="number" min="50" value="500" placeholder="读取行数" />
+                <input id="collector-journal-timeout" class="input" type="number" min="1000" value="15000" placeholder="超时时间（毫秒）" />
+                <input id="collector-journal-command" class="input" placeholder="可选：自定义 journalctl 命令" />
+              </div>
+
+              <div id="collector-mode-oss" class="collector-mode-grid" style="display: none;">
+                <input id="collector-oss-url" class="input" placeholder="objectUrl (https://.../log.txt)" />
+                <input id="collector-oss-timeout" class="input" type="number" min="1000" value="20000" placeholder="超时时间（毫秒）" />
+                <input id="collector-oss-max-read-bytes" class="input" type="number" min="4096" value="1048576" placeholder="最大读取字节数" />
+                <textarea id="collector-oss-headers" class="input collector-textarea" placeholder='请求头 JSON，例如 {"Authorization":"Bearer ..."}'></textarea>
+              </div>
+
+              <div id="collector-mode-syslog" class="collector-mode-grid" style="display: none;">
+                <input id="collector-syslog-token" class="input" placeholder="可选鉴权令牌（x-collector-token）" />
+                <input id="collector-max-lines-push" class="input" type="number" min="1" value="2000" placeholder="单次推送最大行数" />
+              </div>
+
+              <div class="collector-mode-grid">
+                <select id="collector-parse-format" class="input select">
+                  <option value="auto">解析：自动</option>
+                  <option value="json">解析：JSON</option>
+                  <option value="nginx_access">解析：Nginx Access</option>
+                  <option value="plain">解析：纯文本</option>
+                </select>
+                <input id="collector-level-field" class="input" placeholder="级别字段名" value="level" />
+                <input id="collector-message-field" class="input" placeholder="消息字段名" value="message" />
+                <input id="collector-time-field" class="input" placeholder="时间字段名" value="timestamp" />
+                <input id="collector-trace-field" class="input" placeholder="链路字段名（traceId）" value="traceId" />
+                <input id="collector-max-lines" class="input" type="number" min="1" value="500" placeholder="单次运行最大行数" />
+                <input id="collector-tags" class="input" placeholder="标签（逗号分隔）" />
+                <input id="collector-include-patterns" class="input" placeholder="包含规则（正则，逗号分隔）" />
+                <input id="collector-exclude-patterns" class="input" placeholder="排除规则（正则，逗号分隔）" />
+              </div>
+
+              <textarea id="collector-static-meta" class="input collector-textarea" placeholder='静态元数据 JSON，例如 {"env":"prod"}'></textarea>
+
+              <div class="toolbar">
+                <button class="btn btn-primary" type="submit">保存配置</button>
+                <button class="btn btn-secondary" id="collector-form-reset" type="button">重置表单</button>
+                <button class="btn btn-accent" id="btn-refresh-collectors" type="button">刷新列表</button>
+                <span id="collector-form-status" class="collector-status"></span>
+              </div>
+            </form>
           </article>
+
+          <div class="panel-grid two-col">
+            <article class="panel">
+              <h3>采集器列表</h3>
+              <div id="collector-list" class="list"></div>
+            </article>
+            <article class="panel">
+              <h3>采集执行记录</h3>
+              <div id="collector-runs" class="list"></div>
+            </article>
+          </div>
+        </section>
+
+        <section id="view-integration" class="view">
+          <div class="panel-grid two-col">
+            <article class="panel">
+              <h3>接入指南</h3>
+              <p>优先使用 SDK/Starter 引包接入；HTTP 直调仅作为兜底。示例默认以平台域名 <code>https://trace.example.com</code> 为例。</p>
+              <div class="lang-tabs" id="integration-tabs">
+                <button data-lang="javascript" class="lang-btn is-active">JavaScript</button>
+                <button data-lang="python" class="lang-btn">Python</button>
+                <button data-lang="java" class="lang-btn">Java</button>
+                <button data-lang="syslog" class="lang-btn">Syslog</button>
+                <button data-lang="curl" class="lang-btn">cURL</button>
+              </div>
+              <pre id="integration-snippet" class="console"></pre>
+            </article>
+
+            <article class="panel">
+              <div class="panel-head">
+                <h3>SDK 包仓库</h3>
+                <button id="btn-refresh-packages" class="btn btn-primary" type="button">刷新包清单</button>
+              </div>
+              <p>下载真实 SDK/Starter 制品并直接用于接入。安装命令中的 <code>&lt;TRACE_PLATFORM_URL&gt;</code> 请替换为当前平台域名。</p>
+              <div id="package-catalog-status" class="collector-status"></div>
+              <div id="package-catalog-list" class="list package-catalog-list"></div>
+            </article>
+          </div>
         </section>
 
         <section id="view-traffic" class="view">
           <article class="panel">
-            <h3>Traffic Simulation</h3>
+            <h3>流量模拟</h3>
             <div class="toolbar">
               <button id="btn-sim-success" class="btn btn-success">生成成功链路</button>
               <button id="btn-sim-fail" class="btn btn-danger">生成异常链路</button>

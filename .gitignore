@@ -3,3 +3,5 @@ data/platform-store.json
 .DS_Store
 __pycache__/
 *.pyc
+sdks/python/build/
+sdks/python/*.egg-info/

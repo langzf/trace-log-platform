@@ -134,6 +134,8 @@ export function analyzeExceptionLogs(logs, options = {}) {
     const last = sorted[sorted.length - 1];
     const traceIds = [...new Set(sorted.map((item) => item.traceId).filter(Boolean))].slice(0, 20);
     const sampleLogIds = sorted.slice(0, 10).map((item) => item.id);
+    const services = [...new Set(sorted.map((item) => item.service).filter(Boolean))].slice(0, 20);
+    const projectKeys = [...new Set(sorted.map((item) => item.meta?.projectKey).filter(Boolean))].slice(0, 10);
 
     bugReports.push({
       fingerprint,
@@ -143,6 +145,9 @@ export function analyzeExceptionLogs(logs, options = {}) {
       firstSeen: first.timestamp,
       lastSeen: last.timestamp,
       count: sorted.length,
+      services,
+      projectKeys,
+      projectKey: projectKeys.length === 1 ? projectKeys[0] : null,
       traceIds,
       sampleLogIds,
       rootCauseHypothesis: inferRootCause(sorted),
