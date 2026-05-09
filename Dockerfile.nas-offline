@@ -1,0 +1,27 @@
+FROM zhiqu-classroom-backend:latest
+
+WORKDIR /app
+
+RUN rm -rf /app/* /app/.[!.]* /app/..?* || true
+
+COPY .nas-runtime/node /usr/local/bin/node
+COPY .nas-runtime/sqlite3 /usr/local/bin/sqlite3
+RUN chmod +x /usr/local/bin/node /usr/local/bin/sqlite3
+
+COPY package.json ./
+COPY src ./src
+COPY public ./public
+COPY scripts ./scripts
+COPY db ./db
+COPY README.md ./
+COPY .env.example ./
+
+RUN chmod +x scripts/openclaw/install_openclaw.sh || true
+
+ENV NODE_ENV=production
+ENV HOST=0.0.0.0
+ENV PORT=3000
+
+EXPOSE 3000
+
+CMD ["sh", "-c", "node scripts/db/migrate.js up && node src/server.js"]

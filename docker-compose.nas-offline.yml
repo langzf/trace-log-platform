@@ -1,0 +1,4 @@
+services:
+  trace-log-platform:
+    build:
+      dockerfile: Dockerfile.nas-offline
