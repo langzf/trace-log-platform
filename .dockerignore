@@ -1,0 +1,11 @@
+.git
+data
+node_modules
+npm-debug.log*
+*.log
+.DS_Store
+__pycache__
+*.pyc
+sdks/python/build
+sdks/python/*.egg-info
+sdks/java/**/target
