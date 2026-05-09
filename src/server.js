@@ -61,6 +61,7 @@ const DEFAULT_OPENCLAW_CHECK_COMMAND = process.env.OPENCLAW_CHECK_COMMAND || "op
 const DEFAULT_OPENCLAW_ENDPOINT = process.env.OPENCLAW_ENDPOINT || "http://127.0.0.1:18789";
 const DEFAULT_OPENCLAW_HEALTH_PATH = process.env.OPENCLAW_HEALTH_PATH || "/health";
 const DEFAULT_REPAIR_RECEIVER_BASE_URL = process.env.REPAIR_RECEIVER_BASE_URL || "http://127.0.0.1:8788";
+const DEFAULT_CORS_ORIGINS = process.env.CORS_ORIGINS || "*";
 
 const MAX_BODY_BYTES = 1024 * 1024 * 5;
 const CONTENT_TYPE_BY_EXT = {
@@ -95,6 +96,26 @@ function sendText(res, statusCode, payload, contentType = "text/plain; charset=u
   res.statusCode = statusCode;
   res.setHeader("content-type", contentType);
   res.end(payload);
+}
+
+function applyCorsHeaders(req, res) {
+  const requestOrigin = normalizeHeaderValue(req.headers.origin).trim();
+  const configuredOrigins = DEFAULT_CORS_ORIGINS.split(",")
+    .map((item) => item.trim())
+    .filter(Boolean);
+  const allowAll = configuredOrigins.length === 0 || configuredOrigins.includes("*");
+  const allowedOrigin =
+    allowAll || (requestOrigin && configuredOrigins.includes(requestOrigin)) ? requestOrigin || "*" : configuredOrigins[0] || "*";
+
+  res.setHeader("access-control-allow-origin", allowedOrigin);
+  res.setHeader("access-control-allow-methods", "GET,POST,PATCH,DELETE,OPTIONS");
+  res.setHeader(
+    "access-control-allow-headers",
+    "content-type,authorization,x-trace-id,x-parent-span-id,x-client-app,x-service-name,x-collector-key,x-collector-token,idempotency-key,traceparent",
+  );
+  res.setHeader("access-control-expose-headers", "x-trace-id,x-span-id");
+  res.setHeader("access-control-max-age", "86400");
+  res.setHeader("vary", "Origin");
 }
 
 function asInt(value, fallback) {
@@ -2369,12 +2390,19 @@ export async function startServer({
     const startedAt = Date.now();
     const routeContext = createRequestContext(req);
 
+    applyCorsHeaders(req, res);
     res.setHeader("x-trace-id", routeContext.traceContext.traceId);
     res.setHeader("x-span-id", routeContext.traceContext.spanId);
 
     const requestLog = createRequestLogger(store, req, routeContext);
 
     try {
+      if (req.method === "OPTIONS") {
+        res.statusCode = 204;
+        res.end();
+        return;
+      }
+
       const served = await maybeServeStatic(new URL(req.url, "http://local").pathname, res);
       if (served) {
         return;

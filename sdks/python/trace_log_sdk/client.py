@@ -215,7 +215,11 @@ class TraceLogClient:
             url=f"{self._base_url}/v1/logs/batch",
             data=body,
             method="POST",
-            headers={"content-type": "application/json"},
+            headers={
+                "content-type": "application/json",
+                "user-agent": "trace-log-sdk-python/1.0.0",
+                "accept": "application/json",
+            },
         )
 
         try:
