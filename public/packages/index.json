@@ -1,6 +1,6 @@
 {
   "schemaVersion": "v1",
-  "generatedAt": "2026-04-23T12:33:13.112Z",
+  "generatedAt": "2026-05-09T15:36:00.234Z",
   "buildCommand": "npm run sdk:package",
   "packages": [
     {
@@ -18,8 +18,8 @@
           "fileName": "traceai-trace-log-sdk-1.0.0.tgz",
           "relativePath": "packages/javascript/traceai-trace-log-sdk-1.0.0.tgz",
           "downloadPath": "/packages/javascript/traceai-trace-log-sdk-1.0.0.tgz",
-          "sizeBytes": 4181,
-          "sha256": "40715500eec11c3864974c29366de6dbb6c02a75667e2748cf8bdf9e153ecf74",
+          "sizeBytes": 4211,
+          "sha256": "ed438f82252bdee2ee05295a1334c09d86252f9c52615d90e81c27184a2032eb",
           "contentType": "application/gzip"
         }
       ]
@@ -39,8 +39,8 @@
           "fileName": "trace-log-frontend-sdk-1.0.0.js",
           "relativePath": "packages/javascript/trace-log-frontend-sdk-1.0.0.js",
           "downloadPath": "/packages/javascript/trace-log-frontend-sdk-1.0.0.js",
-          "sizeBytes": 8106,
-          "sha256": "b4a1695159b878c84a7adcc48f9e86c2d8362d10779cce37998d61b564005096",
+          "sizeBytes": 8409,
+          "sha256": "df7b43d74fa5ea7e902a9d5965b5a62b543de71b70ff94c3713cc480cf2c6b20",
           "contentType": "application/javascript; charset=utf-8"
         }
       ]
@@ -60,8 +60,8 @@
           "fileName": "trace_log_sdk-1.0.0-py3-none-any.whl",
           "relativePath": "packages/python/trace_log_sdk-1.0.0-py3-none-any.whl",
           "downloadPath": "/packages/python/trace_log_sdk-1.0.0-py3-none-any.whl",
-          "sizeBytes": 4809,
-          "sha256": "cfb50391ede232d37eaac80b63d5e3a6d75d798757ca90998ce949b4d14334de",
+          "sizeBytes": 4907,
+          "sha256": "567997e24f71a375d77bfee349ac5b0a2128f01117a02d373f717f180ad9a42e",
           "contentType": "application/zip"
         }
       ]
@@ -109,5 +109,8 @@
       ]
     }
   ],
-  "warnings": []
+  "warnings": [
+    "maven package failed for com.traceai:trace-log-sdk: mvn.cmd -q -DskipTests package exited with status 1\nstdout:\n[ERROR] Failed to execute goal org.apache.maven.plugins:maven-compiler-plugin:3.1:compile (default-compile) on project trace-log-sdk: Fatal error compiling: ��Ч��Ŀ�귢�а�: 17 -> [Help 1]\r\n[ERROR] \r\n[ERROR] To see the full stack trace of the errors, re-run Maven with the -e switch.\r\n[ERROR] Re-run Maven using the -X switch to enable full debug logging.\r\n[ERROR] \r\n[ERROR] For more information about the errors and possible solutions, please read the following articles:\r\n[ERROR] [Help 1] http://cwiki.apache.org/confluence/display/MAVEN/MojoExecutionException\r\n",
+    "maven package failed for com.traceai:trace-log-spring-boot-starter: mvn.cmd -q -DskipTests package exited with status 1\nstdout:\n[ERROR] Failed to execute goal on project trace-log-spring-boot-starter: Could not resolve dependencies for project com.traceai:trace-log-spring-boot-starter:jar:1.0.0: Could not find artifact com.traceai:trace-log-sdk:jar:1.0.0 in central (https://repo.maven.apache.org/maven2) -> [Help 1]\r\n[ERROR] \r\n[ERROR] To see the full stack trace of the errors, re-run Maven with the -e switch.\r\n[ERROR] Re-run Maven using the -X switch to enable full debug logging.\r\n[ERROR] \r\n[ERROR] For more information about the errors and possible solutions, please read the following articles:\r\n[ERROR] [Help 1] http://cwiki.apache.org/confluence/display/MAVEN/DependencyResolutionException\r\n"
+  ]
 }

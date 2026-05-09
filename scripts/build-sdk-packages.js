@@ -27,6 +27,7 @@ const JAVA_MODULES = [
     artifactHint: "trace-log-spring-boot-starter",
   },
 ];
+const IS_WINDOWS = process.platform === "win32";
 
 const CONTENT_TYPE_BY_EXT = {
   ".js": "application/javascript; charset=utf-8",
@@ -39,7 +40,9 @@ const CONTENT_TYPE_BY_EXT = {
 };
 
 function runCommand(command, args, { cwd, env = {} }) {
-  const result = spawnSync(command, args, {
+  const commandNeedsCmd = IS_WINDOWS && ["npm", "mvn"].includes(command) && !command.endsWith(".cmd");
+  const executable = commandNeedsCmd ? `${command}.cmd` : command;
+  const result = spawnSync(executable, args, {
     cwd,
     env: {
       ...process.env,
@@ -47,15 +50,16 @@ function runCommand(command, args, { cwd, env = {} }) {
     },
     encoding: "utf8",
     stdio: ["ignore", "pipe", "pipe"],
+    shell: commandNeedsCmd,
   });
 
   if (result.error) {
-    throw new Error(`${command} failed: ${result.error.message}`);
+    throw new Error(`${executable} failed: ${result.error.message}`);
   }
   if (result.status !== 0) {
     throw new Error(
       [
-        `${command} ${args.join(" ")} exited with status ${result.status}`,
+        `${executable} ${args.join(" ")} exited with status ${result.status}`,
         result.stdout ? `stdout:\n${result.stdout}` : "",
         result.stderr ? `stderr:\n${result.stderr}` : "",
       ]
@@ -202,7 +206,8 @@ async function buildPythonPackages(registry) {
   const pyprojectText = await fs.readFile(path.join(PYTHON_SDK_DIR, "pyproject.toml"), "utf8");
   const version = parsePyProjectVersion(pyprojectText);
 
-  runCommand("python3", ["-m", "pip", "wheel", "--no-build-isolation", "--no-deps", ".", "-w", outputDir], {
+  const pythonCommand = IS_WINDOWS ? "python" : "python3";
+  runCommand(pythonCommand, ["-m", "pip", "wheel", "--no-build-isolation", "--no-deps", ".", "-w", outputDir], {
     cwd: PYTHON_SDK_DIR,
   });
 
